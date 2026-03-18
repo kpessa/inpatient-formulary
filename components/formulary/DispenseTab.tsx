@@ -149,6 +149,39 @@ export function DispenseTab() {
             <span className="text-xs font-mono">mg</span>
           </div>
 
+          {/* Price schedule / Billing factor */}
+          <div className="space-y-2">
+            <FormField label="Price schedule:">
+              <div className="flex gap-1 items-center">
+                <Select defaultValue="uhs-otc">
+                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 ">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="text-xs font-mono rounded-none">
+                    <SelectItem value="uhs-otc">UHS-OTC</SelectItem>
+                    <SelectItem value="uhs-rx">UHS-RX</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2">
+                  Formula...
+                </Button>
+              </div>
+            </FormField>
+            <FormField label="Billing factor:">
+              <div className="flex gap-1 items-center">
+                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-16 h-6" />
+                <Select>
+                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1">
+                    <SelectValue placeholder="" />
+                  </SelectTrigger>
+                  <SelectContent className="text-xs font-mono rounded-none">
+                    <SelectItem value="1">1</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </FormField>
+          </div>
+
         </div>
 
         {/* RIGHT COLUMN */}
@@ -230,38 +263,6 @@ export function DispenseTab() {
             </FormField>
           </fieldset>
 
-          {/* Price schedule / Billing factor */}
-          <div className="space-y-2">
-            <FormField label="Price schedule:">
-              <div className="flex gap-1 items-center">
-                <Select defaultValue="uhs-otc">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 ">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="uhs-otc">UHS-OTC</SelectItem>
-                    <SelectItem value="uhs-rx">UHS-RX</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2">
-                  Formula...
-                </Button>
-              </div>
-            </FormField>
-            <FormField label="Billing factor:">
-              <div className="flex gap-1 items-center">
-                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-16 h-6" />
-                <Select>
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1">
-                    <SelectValue placeholder="" />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="1">1</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </FormField>
-          </div>
 
           {/* Point of Care scan charge setting */}
           <fieldset className="border border-[#808080] p-2 pt-1 rounded-md space-y-1">
