@@ -43,20 +43,21 @@ export function InventoryTab() {
   return (
     <div className="p-3 text-xs font-mono flex flex-col gap-3 h-full">
       {/* Column headers */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="text-xs font-mono">
-          <span className="text-[#CC0000]">*</span> Orderable in the following facilities:
+      <div className="grid grid-cols-[1fr_1fr_1fr_180px] gap-3">
+        <div className="text-xs font-mono pr-2">
+          <span className="text-[#CC0000]">*</span> Orderable in the following<br />facilities:
         </div>
-        <div className="text-xs font-mono">
-          Stocked in the following non-floorstock locations:
+        <div className="text-xs font-mono pr-2">
+          Stocked in the following non-<br />floorstock locations:
         </div>
-        <div className="text-xs font-mono">
-          Stocked in the following floorstock locations:
+        <div className="text-xs font-mono pr-2">
+          Stocked in the following<br />floorstock locations:
         </div>
+        <div></div>
       </div>
 
-      {/* Three-column layout with lists and buttons */}
-      <div className="grid grid-cols-3 gap-2 flex-1 min-h-0">
+      {/* Four-column layout with lists and buttons */}
+      <div className="grid grid-cols-[1fr_1fr_1fr_180px] gap-3 flex-1 min-h-0 mt-1">
         {/* Column 1: Facilities */}
         <div className="flex flex-col gap-2 min-h-0">
           <div className="border border-[#808080] bg-white overflow-y-auto flex-1">
@@ -69,12 +70,12 @@ export function InventoryTab() {
               </div>
             ))}
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-3">
+          <div className="flex gap-2 shrink-0 mt-2">
+            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-2 flex-1 relative -mb-1">
               Update Facilities
             </Button>
-            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-3">
-              Flex by Facility
+            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-2 flex-1 relative -mb-1">
+              Flex by Fac.
             </Button>
           </div>
         </div>
@@ -91,55 +92,55 @@ export function InventoryTab() {
               </div>
             ))}
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-3">
+          <div className="flex gap-2 shrink-0 mt-2">
+            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-2 flex-1 relative -mb-1">
               Update Pharmacies
             </Button>
-            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-3">
+            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-2 flex-1 relative -mb-1">
               Flex NDC
             </Button>
           </div>
         </div>
 
-        {/* Column 3: Floorstock + right sidebar */}
-        <div className="flex gap-2 min-h-0">
-          {/* Floorstock list */}
-          <div className="flex flex-col gap-2 flex-1 min-h-0">
-            <div className="border border-[#808080] bg-white overflow-y-auto flex-1">
-              {floorstockLocations.map((loc) => (
-                <div
-                  key={loc}
-                  className="px-1 py-px text-xs font-mono cursor-pointer hover:bg-[#C7D5E8] leading-4"
-                >
-                  {loc}
-                </div>
-              ))}
-            </div>
-            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-3 w-full">
+        {/* Column 3: Floorstock */}
+        <div className="flex flex-col gap-2 min-h-0">
+          <div className="border border-[#808080] bg-white overflow-y-auto flex-1">
+            {floorstockLocations.map((loc) => (
+              <div
+                key={loc}
+                className="px-1 py-px text-xs font-mono cursor-pointer hover:bg-[#C7D5E8] leading-4"
+              >
+                {loc}
+              </div>
+            ))}
+          </div>
+          <div className="shrink-0 mt-2">
+            <Button variant="outline" size="sm" className="h-7 text-xs font-mono rounded-none border-[#808080] px-3 w-full relative -mb-1">
               Update Floorstock
             </Button>
           </div>
+        </div>
 
-          {/* Right panel: Dispense from + checkboxes */}
-          <div className="flex flex-col gap-2 w-44 min-h-0">
-            <div className="border border-[#808080] p-2">
-              <div className="text-xs font-mono mb-1 font-semibold">Dispense from</div>
-              <div className="space-y-1">
+        {/* Column 4: Dispense from + checkboxes */}
+        <div className="flex flex-col gap-2 min-h-0">
+            <fieldset className="border border-[#808080] rounded-md p-1.5 pt-0.5 text-xs font-mono">
+              <legend className="text-xs font-mono px-1 ml-1 text-black font-semibold">Dispense from</legend>
+              <div className="space-y-1 mt-1">
                 <div className="flex items-center gap-1">
                   <input type="radio" name="dispense" defaultChecked className="w-3 h-3" />
                   <span className="text-xs font-mono">Check location list</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <input type="radio" name="dispense" className="w-3 h-3" />
-                  <span className="text-xs font-mono">Always dispense from non-floorstock location</span>
+                <div className="flex items-start gap-1">
+                  <input type="radio" name="dispense" className="w-3 h-3 mt-0.5 shrink-0" />
+                  <span className="text-xs font-mono leading-tight">Always dispense from non-floorstock location</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <input type="radio" name="dispense" className="w-3 h-3" />
-                  <span className="text-xs font-mono">Always dispense from floorstock</span>
+                <div className="flex items-start gap-1">
+                  <input type="radio" name="dispense" className="w-3 h-3 mt-0.5 shrink-0" />
+                  <span className="text-xs font-mono leading-tight">Always dispense from floorstock</span>
                 </div>
               </div>
-            </div>
-            <div className="space-y-1 overflow-y-auto">
+            </fieldset>
+            <div className="space-y-1 overflow-y-auto pr-1">
               {[
                 { label: "Upon return to pharmacy, this product is reusable.", checked: true },
                 { label: "Track lot numbers", checked: false },
@@ -157,7 +158,6 @@ export function InventoryTab() {
               ))}
             </div>
           </div>
-        </div>
       </div>
     </div>
   )

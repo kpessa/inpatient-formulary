@@ -65,7 +65,7 @@ export default function PharmNetFormulary() {
   return (
     <div className="min-h-screen bg-[#808080] flex items-start justify-center p-4">
     <div
-      className="flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-lg w-full max-w-[740px] min-h-[620px]"
+      className="flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-lg w-full max-w-[740px] h-[620px] max-h-screen"
     >
       {/* Title bar */}
       <div className="flex items-center justify-between bg-[#C85A00] text-white px-2 h-7 shrink-0">
@@ -224,7 +224,7 @@ export default function PharmNetFormulary() {
       </div>
 
       {/* Tab content area */}
-      <div className="bg-[#D4D0C8] flex-1 border border-[#808080] mx-3 mb-2 overflow-auto min-h-[420px]">
+      <div className="bg-[#D4D0C8] flex-1 flex flex-col border border-[#808080] mx-3 mb-2 overflow-hidden min-h-0">
         {activeTab === "oe-defaults" && <OEDefaultsTab />}
         {activeTab === "dispense" && <DispenseTab />}
         {activeTab === "inventory" && <InventoryTab />}
