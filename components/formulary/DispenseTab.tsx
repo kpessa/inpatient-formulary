@@ -176,10 +176,13 @@ export function DispenseTab() {
           </div>
 
           {/* CMS billing unit */}
-          <div className="flex items-center gap-2 mt-3 block">
-            <span className="text-xs font-mono">CMS billing unit:</span>
-            <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20 h-6" />
-            <span className="text-xs font-mono">mg</span>
+          <div className="mt-3">
+            <FormField label="CMS billing unit">
+              <div className="flex items-center gap-1">
+                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20 h-6" />
+                <span className="text-xs font-mono">mg</span>
+              </div>
+            </FormField>
           </div>
 
         </div>
@@ -234,17 +237,19 @@ export function DispenseTab() {
           </fieldset>
 
           {/* Max QPD for APA / Standardized Range buttons */}
-          <div className="flex items-end gap-2">
-            <div className="flex items-center gap-1">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
               <span className="text-xs font-mono">Max QPD for APA:</span>
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-16 h-6" />
-              <span className="text-xs font-mono">Tabs</span>
+              <div className="flex items-center gap-1 pr-[88px]">
+                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-16 h-6" />
+                <span className="text-xs font-mono">Tabs</span>
+              </div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2">
+              <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2 w-[140px]">
                 Standardized Range
               </Button>
-              <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2">
+              <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2 w-[160px]">
                 Preparation Information
               </Button>
             </div>
