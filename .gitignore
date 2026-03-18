@@ -16,5 +16,3 @@ out/
 # build
 dist/
 
-# data (large files)
-data/

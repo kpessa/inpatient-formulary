@@ -6,6 +6,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  outputFileTracingIncludes: {
+    "/api/formulary/search": ["./data/**/*"],
+    "/api/formulary/item": ["./data/**/*"],
+  },
 }
 
 export default nextConfig
