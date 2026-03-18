@@ -19,10 +19,10 @@ export function DispenseTab() {
       <div className="grid grid-cols-[auto_auto] gap-x-8 gap-y-4">
         
         {/* LEFT COLUMN */}
-        <div className="space-y-3">
+        <div className="space-y-4">
           
           {/* Strength / Volume */}
-          <div className="flex gap-3 items-end">
+          <div className="flex gap-4 items-end">
             <FormField label="Strength:" required>
               <div className="flex gap-1 items-center">
                 <Input
@@ -113,16 +113,18 @@ export function DispenseTab() {
           {/* Package dispense quantity */}
           <fieldset className="border border-[#808080] p-2 pt-1 rounded-md">
             <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Package dispense quantity</legend>
-            <div className="flex items-center gap-1 mb-1 mt-1">
-              <span className="text-xs font-mono">Number of:</span>
-              <Input defaultValue="1" className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
-              <span className="text-xs font-mono">Tabs</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-xs font-mono">per package:</span>
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
-              <Checkbox className="rounded-none border-[#808080] h-3.5 w-3.5" />
-              <span className="text-xs font-mono">Allow Package to be Broken</span>
+            <div className="grid grid-cols-[auto_1fr] gap-y-1 gap-x-1 items-center mt-1">
+              <span className="text-xs font-mono justify-self-end w-[72px] text-right">Number of:</span>
+              <div className="flex items-center gap-1">
+                <Input defaultValue="1" className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
+                <span className="text-xs font-mono">Tabs</span>
+              </div>
+              <span className="text-xs font-mono justify-self-end w-[72px] text-right">per package:</span>
+              <div className="flex items-center gap-1">
+                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
+                <Checkbox className="rounded-none border-[#808080] h-3.5 w-3.5" />
+                <span className="text-xs font-mono">Allow Package to be Broken</span>
+              </div>
             </div>
           </fieldset>
 
@@ -150,10 +152,10 @@ export function DispenseTab() {
         </div>
 
         {/* RIGHT COLUMN */}
-        <div className="space-y-3">
+        <div className="space-y-4">
           
           {/* Used in total volume / Workflow sequence */}
-          <div className="flex gap-3 items-end">
+          <div className="flex gap-4 items-end">
             <FormField label="Used in total volume calculation:" className="flex-1">
               <Select defaultValue="never">
                 <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1 ">
@@ -183,7 +185,7 @@ export function DispenseTab() {
               <Checkbox defaultChecked className="rounded-none border-[#808080] h-3.5 w-3.5" />
               <span className="text-xs font-mono font-bold text-black">This product is divisible</span>
             </legend>
-            <div className="flex items-center gap-2 mb-1 mt-1">
+            <div className="flex items-center gap-2 mb-1 mt-1 pl-1">
               <input type="radio" name="divisible" defaultChecked className="w-3 h-3" />
               <span className="text-xs font-mono">Minimum divisible factor</span>
               <Input
@@ -192,7 +194,7 @@ export function DispenseTab() {
               />
               <span className="text-xs font-mono">Tabs</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 pl-1">
               <input type="radio" name="divisible" className="w-3 h-3" />
               <span className="text-xs font-mono">Infinitely divisible</span>
             </div>
@@ -265,11 +267,11 @@ export function DispenseTab() {
           <fieldset className="border border-[#808080] p-2 pt-1 rounded-md space-y-1">
             <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Point of Care scan charge setting</legend>
             <div className="text-xs font-mono mt-1">Charge for:</div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 pl-2">
               <input type="radio" name="charge" defaultChecked className="w-3 h-3" />
               <span className="text-xs font-mono">Scanned products</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 pl-2">
               <input type="radio" name="charge" className="w-3 h-3" />
               <span className="text-xs font-mono">Ordered/assigned products</span>
             </div>
