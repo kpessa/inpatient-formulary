@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
@@ -62,20 +62,104 @@ export default function PharmNetFormulary() {
     return () => clearInterval(interval)
   }, [])
 
+  const [rect, setRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null)
+  const isResizing = useRef<{ dir: string, startX: number, startY: number, startRect: { x: number, y: number, w: number, h: number } } | null>(null)
+
+  useEffect(() => {
+    setRect({
+      x: Math.max(0, (window.innerWidth - 740) / 2),
+      y: Math.max(0, (window.innerHeight - 620) / 2),
+      w: 740,
+      h: 620,
+    })
+  }, [])
+
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!isResizing.current) return
+      const { dir, startX, startY, startRect } = isResizing.current
+      const dx = e.clientX - startX
+      const dy = e.clientY - startY
+      
+      if (dir === 'move') {
+        setRect({ ...startRect, x: startRect.x + dx, y: startRect.y + dy })
+        return
+      }
+      
+      let newW = startRect.w
+      let newH = startRect.h
+      let newX = startRect.x
+      let newY = startRect.y
+      
+      if (dir.includes('e')) newW = Math.max(500, startRect.w + dx)
+      if (dir.includes('w')) {
+        const potentialW = Math.max(500, startRect.w - dx)
+        newX = startRect.x + (startRect.w - potentialW)
+        newW = potentialW
+      }
+      if (dir.includes('s')) newH = Math.max(400, startRect.h + dy)
+      if (dir.includes('n')) {
+        const potentialH = Math.max(400, startRect.h - dy)
+        newY = startRect.y + (startRect.h - potentialH)
+        newH = potentialH
+      }
+      
+      setRect({ x: newX, y: newY, w: newW, h: newH })
+    }
+    const handlePointerUp = () => {
+      if (isResizing.current) {
+        isResizing.current = null
+      }
+    }
+    
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [])
+  
+  const handlePointerDown = (dir: string) => (e: React.PointerEvent) => {
+    if (!rect) return
+    e.preventDefault()
+    e.stopPropagation()
+    isResizing.current = { dir, startX: e.clientX, startY: e.clientY, startRect: rect }
+    const target = e.target as HTMLElement
+    // We let the window pointermove handle tracking
+  }
+
+  if (!rect) {
+    return <div className="min-h-screen bg-[#808080]" /> // Avoid hydration mismatch
+  }
+
   return (
-    <div className="min-h-screen bg-[#808080] flex items-start justify-center p-4">
-    <div
-      className="flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-lg w-full max-w-[740px] h-[620px] max-h-screen"
-    >
-      {/* Title bar */}
-      <div className="flex items-center justify-between bg-[#C85A00] text-white px-2 h-7 shrink-0">
-        <div className="flex items-center gap-1.5">
+    <div className="min-h-screen bg-[#808080] overflow-hidden">
+      <div
+        className="absolute flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-2xl border border-white border-r-[#808080] border-b-[#808080]"
+        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+      >
+        {/* Resize Handles */}
+        <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
+        <div onPointerDown={handlePointerDown('s')} className="absolute bottom-0 left-2 right-2 h-1 cursor-s-resize z-20" />
+        <div onPointerDown={handlePointerDown('e')} className="absolute top-2 bottom-2 right-0 w-1 cursor-e-resize z-20" />
+        <div onPointerDown={handlePointerDown('w')} className="absolute top-2 bottom-2 left-0 w-1 cursor-w-resize z-20" />
+        <div onPointerDown={handlePointerDown('nw')} className="absolute top-0 left-0 w-2 h-2 cursor-nw-resize z-20" />
+        <div onPointerDown={handlePointerDown('ne')} className="absolute top-0 right-0 w-2 h-2 cursor-ne-resize z-20" />
+        <div onPointerDown={handlePointerDown('sw')} className="absolute bottom-0 left-0 w-2 h-2 cursor-sw-resize z-20" />
+        <div onPointerDown={handlePointerDown('se')} className="absolute bottom-0 right-0 w-2 h-2 cursor-se-resize z-20" />
+
+        {/* Title bar */}
+        <div 
+          className="flex items-center justify-between bg-[#C85A00] text-white px-2 h-7 shrink-0 cursor-default"
+          onPointerDown={handlePointerDown('move')}
+        >
+          <div className="flex items-center gap-1.5 pointer-events-none">
           {/* App icon placeholder */}
           <div className="w-4 h-4 bg-white/20 border border-white/40 flex items-center justify-center text-[8px]">Rx</div>
           <span className="text-sm font-bold font-mono tracking-tight">PharmNet Inpatient Formulary Manager</span>
         </div>
-        {/* Window controls */}
-        <div className="flex gap-1">
+        <div className="flex gap-1" onPointerDown={e => e.stopPropagation()}>
           <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
           <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">□</button>
           <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">✕</button>

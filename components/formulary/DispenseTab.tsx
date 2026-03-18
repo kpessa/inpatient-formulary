@@ -85,7 +85,7 @@ export function DispenseTab() {
             <FormField label="Dispense category:">
               <div className="flex gap-1 items-center">
                 <Select defaultValue="ud">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 w-24 bg-[#316AC5] text-white">
+                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 w-24 ">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="text-xs font-mono rounded-none">
@@ -111,9 +111,9 @@ export function DispenseTab() {
           </div>
 
           {/* Package dispense quantity */}
-          <div className="border border-[#808080] p-2">
-            <div className="text-xs font-mono font-bold mb-2">Package dispense quantity</div>
-            <div className="flex items-center gap-1 mb-1">
+          <fieldset className="border border-[#808080] p-2 pt-1 rounded-md">
+            <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Package dispense quantity</legend>
+            <div className="flex items-center gap-1 mb-1 mt-1">
               <span className="text-xs font-mono">Number of:</span>
               <Input defaultValue="1" className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
               <span className="text-xs font-mono">Tabs</span>
@@ -124,12 +124,12 @@ export function DispenseTab() {
               <Checkbox className="rounded-none border-[#808080] h-3.5 w-3.5" />
               <span className="text-xs font-mono">Allow Package to be Broken</span>
             </div>
-          </div>
+          </fieldset>
 
           {/* Formulary status */}
           <FormField label="Formulary status:" required className="w-full">
             <Select defaultValue="formulary">
-              <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1 bg-[#316AC5] text-white">
+              <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1 ">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="text-xs font-mono rounded-none">
@@ -156,7 +156,7 @@ export function DispenseTab() {
           <div className="flex gap-3 items-end">
             <FormField label="Used in total volume calculation:" className="flex-1">
               <Select defaultValue="never">
-                <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1 bg-[#316AC5] text-white">
+                <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1 ">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="text-xs font-mono rounded-none">
@@ -178,12 +178,12 @@ export function DispenseTab() {
           </div>
 
           {/* Divisible product options */}
-          <div className="border border-[#808080] p-2">
-            <div className="flex items-center gap-1 mb-2">
+          <fieldset className="border border-[#808080] p-2 pt-1 rounded-md">
+            <legend className="flex items-center gap-1 px-1 ml-1">
               <Checkbox defaultChecked className="rounded-none border-[#808080] h-3.5 w-3.5" />
-              <span className="text-xs font-mono font-bold">This product is divisible</span>
-            </div>
-            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs font-mono font-bold text-black">This product is divisible</span>
+            </legend>
+            <div className="flex items-center gap-2 mb-1 mt-1">
               <input type="radio" name="divisible" defaultChecked className="w-3 h-3" />
               <span className="text-xs font-mono">Minimum divisible factor</span>
               <Input
@@ -196,7 +196,7 @@ export function DispenseTab() {
               <input type="radio" name="divisible" className="w-3 h-3" />
               <span className="text-xs font-mono">Infinitely divisible</span>
             </div>
-          </div>
+          </fieldset>
 
           {/* Max QPD for APA / Standardized Range buttons */}
           <div className="flex items-end gap-2">
@@ -216,22 +216,24 @@ export function DispenseTab() {
           </div>
 
           {/* Par supply section */}
-          <div className="space-y-2">
-            <div className="text-xs font-mono font-bold">Par supply</div>
-            <FormField label="Default par doses, this will override the frequency par defaults:">
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-full h-5" />
-            </FormField>
+          <fieldset className="border border-[#808080] p-2 pt-1 rounded-md space-y-2">
+            <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Par supply</legend>
+            <div className="mt-1">
+              <FormField label="Default par doses, this will override the frequency par defaults:">
+                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-full h-5" />
+              </FormField>
+            </div>
             <FormField label="Maximum par quantity to be dispensed at a time:">
               <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-full h-5" />
             </FormField>
-          </div>
+          </fieldset>
 
           {/* Price schedule / Billing factor */}
           <div className="space-y-2">
             <FormField label="Price schedule:">
               <div className="flex gap-1 items-center">
                 <Select defaultValue="uhs-otc">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 bg-[#316AC5] text-white">
+                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 ">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="text-xs font-mono rounded-none">
@@ -260,9 +262,9 @@ export function DispenseTab() {
           </div>
 
           {/* Point of Care scan charge setting */}
-          <div className="space-y-1">
-            <div className="text-xs font-mono font-bold">Point of Care scan charge setting</div>
-            <div className="text-xs font-mono">Charge for:</div>
+          <fieldset className="border border-[#808080] p-2 pt-1 rounded-md space-y-1">
+            <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Point of Care scan charge setting</legend>
+            <div className="text-xs font-mono mt-1">Charge for:</div>
             <div className="flex items-center gap-1">
               <input type="radio" name="charge" defaultChecked className="w-3 h-3" />
               <span className="text-xs font-mono">Scanned products</span>
@@ -271,7 +273,7 @@ export function DispenseTab() {
               <input type="radio" name="charge" className="w-3 h-3" />
               <span className="text-xs font-mono">Ordered/assigned products</span>
             </div>
-          </div>
+          </fieldset>
 
         </div>
       </div>
