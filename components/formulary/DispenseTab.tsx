@@ -142,15 +142,8 @@ export function DispenseTab() {
             </Select>
           </FormField>
 
-          {/* CMS billing unit */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono">CMS billing unit:</span>
-            <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20 h-6" />
-            <span className="text-xs font-mono">mg</span>
-          </div>
-
           {/* Price schedule / Billing factor */}
-          <div className="space-y-2">
+          <div className="space-y-2 mt-2">
             <FormField label="Price schedule:">
               <div className="flex gap-1 items-center">
                 <Select defaultValue="uhs-otc">
@@ -180,6 +173,13 @@ export function DispenseTab() {
                 </Select>
               </div>
             </FormField>
+          </div>
+
+          {/* CMS billing unit */}
+          <div className="flex items-center gap-2 mt-3 block">
+            <span className="text-xs font-mono">CMS billing unit:</span>
+            <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20 h-6" />
+            <span className="text-xs font-mono">mg</span>
           </div>
 
         </div>
@@ -253,14 +253,14 @@ export function DispenseTab() {
           {/* Par supply section */}
           <fieldset className="border border-[#808080] p-2 pt-1 rounded-md space-y-2">
             <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Par supply</legend>
-            <div className="mt-1">
-              <FormField label="Default par doses, this will override the frequency par defaults:">
-                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-full h-5" />
-              </FormField>
+            <div className="mt-1 flex flex-col gap-1">
+              <label className="text-xs font-mono leading-none">Default par doses, this will override the frequency par defaults:</label>
+              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[95%] ml-auto block h-5" />
             </div>
-            <FormField label="Maximum par quantity to be dispensed at a time:">
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-full h-5" />
-            </FormField>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-mono leading-none">Maximum par quantity to be dispensed at a time:</label>
+              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[95%] ml-auto block h-5" />
+            </div>
           </fieldset>
 
 
