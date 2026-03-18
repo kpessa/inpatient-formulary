@@ -110,17 +110,11 @@ export function DispenseTab() {
             <span className="text-xs font-mono">Each</span>
           </div>
 
-          {/* Max QPD for APA / Standardized Range buttons */}
+          {/* Max QPD for APA */}
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono">Max QPD for APA:</span>
             <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
             <span className="text-xs font-mono pr-2">Tabs</span>
-            <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2">
-              Standardized Range
-            </Button>
-            <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2">
-              Preparation Information
-            </Button>
           </div>
 
           {/* Package dispense quantity */}
@@ -249,17 +243,26 @@ export function DispenseTab() {
             </div>
           </fieldset>
 
+          {/* Standardized Range buttons */}
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2 w-[140px]">
+              Standardized Range
+            </Button>
+            <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2 w-[160px]">
+              Preparation Information
+            </Button>
+          </div>
 
           {/* Par supply section */}
           <fieldset className="border border-[#808080] p-2 pt-1 rounded-md space-y-2">
             <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Par supply</legend>
             <div className="mt-1 flex flex-col gap-1">
               <label className="text-xs font-mono leading-none">Default par doses, this will override the frequency par defaults:</label>
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[95%] ml-auto block h-5" />
+              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[200px] ml-auto block h-5" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-mono leading-none">Maximum par quantity to be dispensed at a time:</label>
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[95%] ml-auto block h-5" />
+              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[200px] ml-auto block h-5" />
             </div>
           </fieldset>
 
