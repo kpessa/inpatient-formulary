@@ -47,7 +47,7 @@ export function IdentifiersTab() {
   const [rows, setRows] = useState(identifierData)
 
   return (
-    <div className="p-3 text-xs font-mono flex flex-col gap-2">
+    <div className="p-3 text-xs font-mono flex flex-col gap-2 h-full">
       {/* New button */}
       <div>
         <Button
@@ -61,7 +61,7 @@ export function IdentifiersTab() {
       </div>
 
       {/* Identifiers table */}
-      <div className="border border-[#808080] overflow-auto" style={{ maxHeight: "460px" }}>
+      <div className="border border-[#808080] overflow-auto flex-1">
         <Table className="text-xs font-mono border-collapse w-full">
           <TableHeader className="sticky top-0 bg-[#D4D0C8] z-10">
             <TableRow className="border-b border-[#808080]">
