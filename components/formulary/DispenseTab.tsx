@@ -11,54 +11,53 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { FormField } from "./FormField"
+import type { FormularyItem } from "@/lib/types"
 
-export function DispenseTab() {
+interface DispenseTabProps {
+  item: FormularyItem | null
+}
+
+export function DispenseTab({ item }: DispenseTabProps) {
+  const d = item?.dispense
+  const totalVolCalcValue = d?.usedInTotalVolumeCalculation ? "always" : "never"
+
   return (
     <div className="p-3 text-xs font-mono w-fit">
       {/* Main two-column layout */}
       <div className="grid grid-cols-[auto_auto] gap-x-8 gap-y-4">
-        
+
         {/* LEFT COLUMN */}
         <div className="space-y-4">
-          
+
           {/* Strength / Volume */}
           <div className="flex gap-4 items-end">
             <FormField label="Strength:" required>
               <div className="flex gap-1 items-center">
                 <Input
-                  defaultValue="500"
+                  value={d?.strength != null ? String(d.strength) : ""}
+                  readOnly
                   className="text-xs font-mono rounded-none border border-[#808080] px-1 w-16"
                 />
-                <Select defaultValue="mg">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="mg">mg</SelectItem>
-                    <SelectItem value="mcg">mcg</SelectItem>
-                    <SelectItem value="g">g</SelectItem>
-                    <SelectItem value="mEq">mEq</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input
+                  value={d?.strengthUnit ?? ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20"
+                />
               </div>
             </FormField>
             <span className="text-xs font-mono mb-1">/</span>
             <FormField label="Volume:" required>
               <div className="flex gap-1 items-center">
                 <Input
-                  defaultValue="1"
+                  value={d?.volume != null ? String(d.volume) : ""}
+                  readOnly
                   className="text-xs font-mono rounded-none border border-[#808080] px-1 w-12"
                 />
-                <Select defaultValue="tabs">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="tabs">Tabs</SelectItem>
-                    <SelectItem value="caps">Caps</SelectItem>
-                    <SelectItem value="mL">mL</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input
+                  value={d?.volumeUnit ?? ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20"
+                />
               </div>
             </FormField>
           </div>
@@ -68,31 +67,24 @@ export function DispenseTab() {
             <FormField label="Dispense quantity:">
               <div className="flex gap-1 items-center">
                 <Input
-                  defaultValue="1"
+                  value={d?.dispenseQty != null ? String(d.dispenseQty) : ""}
+                  readOnly
                   className="text-xs font-mono rounded-none border border-[#808080] px-1 w-12"
                 />
-                <Select defaultValue="tabs">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="tabs">Tabs</SelectItem>
-                    <SelectItem value="caps">Caps</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input
+                  value={d?.dispenseQtyUnit ?? ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20"
+                />
               </div>
             </FormField>
             <FormField label="Dispense category:">
               <div className="flex gap-1 items-center">
-                <Select defaultValue="ud">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 w-24 ">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="ud">UD</SelectItem>
-                    <SelectItem value="bulk">Bulk</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input
+                  value={d?.dispenseCategory ?? ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 w-24"
+                />
                 <button className="h-6 w-6 border border-[#808080] bg-[#D4D0C8] text-xs font-mono flex items-center justify-center">
                   ...
                 </button>
@@ -102,9 +94,8 @@ export function DispenseTab() {
 
           {/* Dispense factor */}
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono">Dispense factor: 1 Tabs =</span>
+            <span className="text-xs font-mono">Dispense factor: 1 {d?.basePackageUnit ?? ""} =</span>
             <Input
-              defaultValue="1"
               className="text-xs font-mono rounded-none border border-[#808080] px-1 w-12 h-6"
             />
             <span className="text-xs font-mono">Each</span>
@@ -114,7 +105,7 @@ export function DispenseTab() {
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono">Max QPD for APA:</span>
             <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
-            <span className="text-xs font-mono pr-2">Tabs</span>
+            <span className="text-xs font-mono pr-2">{d?.basePackageUnit ?? ""}</span>
           </div>
 
           {/* Package dispense quantity */}
@@ -123,13 +114,24 @@ export function DispenseTab() {
             <div className="grid grid-cols-[auto_1fr] gap-y-1 gap-x-1 items-center mt-1">
               <span className="text-xs font-mono justify-self-end w-[72px] text-right">Number of:</span>
               <div className="flex items-center gap-1">
-                <Input defaultValue="1" className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
-                <span className="text-xs font-mono">Tabs</span>
+                <Input
+                  value={d?.packageSize != null ? String(d.packageSize) : ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5"
+                />
+                <span className="text-xs font-mono">{d?.packageUnit ?? ""}</span>
               </div>
               <span className="text-xs font-mono justify-self-end w-[72px] text-right">per package:</span>
               <div className="flex items-center gap-1">
-                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5" />
-                <Checkbox className="rounded-none border-[#808080] h-3.5 w-3.5" />
+                <Input
+                  value={d?.outerPackageSize != null ? String(d.outerPackageSize) : ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5"
+                />
+                <Checkbox
+                  checked={d?.packageDispenseOnlyQtyNeeded ?? false}
+                  className="rounded-none border-[#808080] h-3.5 w-3.5"
+                />
                 <span className="text-xs font-mono">Allow Package to be Broken</span>
               </div>
             </div>
@@ -137,31 +139,22 @@ export function DispenseTab() {
 
           {/* Formulary status */}
           <FormField label="Formulary status:" required className="w-full">
-            <Select defaultValue="formulary">
-              <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1 ">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="text-xs font-mono rounded-none">
-                <SelectItem value="formulary">Formulary</SelectItem>
-                <SelectItem value="nonformulary">Non-Formulary</SelectItem>
-                <SelectItem value="restricted">Restricted</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input
+              value={d?.formularyStatus ?? ""}
+              readOnly
+              className="w-full text-xs font-mono rounded-none border border-[#808080] px-1"
+            />
           </FormField>
 
           {/* Price schedule / Billing factor */}
           <div className="space-y-2 mt-2">
             <FormField label="Price schedule:">
               <div className="flex gap-1 items-center">
-                <Select defaultValue="uhs-otc">
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 ">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="uhs-otc">UHS-OTC</SelectItem>
-                    <SelectItem value="uhs-rx">UHS-RX</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input
+                  value={d?.priceSchedule ?? ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1"
+                />
                 <Button variant="outline" size="sm" className="h-6 text-xs font-mono rounded-none border-[#808080] px-2">
                   Formula...
                 </Button>
@@ -169,15 +162,12 @@ export function DispenseTab() {
             </FormField>
             <FormField label="Billing factor:">
               <div className="flex gap-1 items-center">
-                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-16 h-6" />
-                <Select>
-                  <SelectTrigger className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1">
-                    <SelectValue placeholder="" />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs font-mono rounded-none">
-                    <SelectItem value="1">1</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Input
+                  value={d?.awpFactor != null ? String(d.awpFactor) : ""}
+                  readOnly
+                  className="text-xs font-mono rounded-none border border-[#808080] px-1 w-16 h-6"
+                />
+                <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 h-6" />
               </div>
             </FormField>
           </div>
@@ -187,7 +177,7 @@ export function DispenseTab() {
             <FormField label="CMS billing unit">
               <div className="flex items-center gap-1">
                 <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20 h-6" />
-                <span className="text-xs font-mono">mg</span>
+                <span className="text-xs font-mono">{d?.strengthUnit ?? ""}</span>
               </div>
             </FormField>
           </div>
@@ -196,49 +186,52 @@ export function DispenseTab() {
 
         {/* RIGHT COLUMN */}
         <div className="space-y-4">
-          
+
           {/* Used in total volume / Workflow sequence */}
           <div className="flex gap-4 items-end">
             <FormField label="Used in total volume calculation:" className="flex-1">
-              <Select defaultValue="never">
-                <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1 ">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="text-xs font-mono rounded-none">
-                  <SelectItem value="never">Never</SelectItem>
-                  <SelectItem value="always">Always</SelectItem>
-                </SelectContent>
-              </Select>
+              <Input
+                value={totalVolCalcValue}
+                readOnly
+                className="w-full text-xs font-mono rounded-none border border-[#808080] px-1"
+              />
             </FormField>
             <FormField label="Workflow sequence:" className="w-40">
-              <Select>
-                <SelectTrigger className="w-full text-xs font-mono rounded-none border border-[#808080] px-1">
-                  <SelectValue placeholder="" />
-                </SelectTrigger>
-                <SelectContent className="text-xs font-mono rounded-none">
-                  <SelectItem value="1">1</SelectItem>
-                </SelectContent>
-              </Select>
+              <Input className="w-full text-xs font-mono rounded-none border border-[#808080] px-1" />
             </FormField>
           </div>
 
           {/* Divisible product options */}
           <fieldset className="border border-[#808080] p-2 pt-1 rounded-md">
             <legend className="flex items-center gap-1 px-1 ml-1">
-              <Checkbox defaultChecked className="rounded-none border-[#808080] h-3.5 w-3.5" />
+              <Checkbox
+                checked={d?.isDivisible ?? false}
+                className="rounded-none border-[#808080] h-3.5 w-3.5"
+              />
               <span className="text-xs font-mono font-bold text-black">This product is divisible</span>
             </legend>
             <div className="flex items-center gap-2 mb-1 mt-1 pl-1">
-              <input type="radio" name="divisible" defaultChecked className="w-3 h-3" />
+              <input
+                type="radio"
+                name="divisible"
+                defaultChecked={!d?.isInfinitelyDivisible}
+                className="w-3 h-3"
+              />
               <span className="text-xs font-mono">Minimum divisible factor</span>
               <Input
-                defaultValue="0.25"
+                value={d?.minimumDoseQty != null ? String(d.minimumDoseQty) : ""}
+                readOnly
                 className="text-xs font-mono rounded-none border border-[#808080] px-1 w-14 h-5"
               />
-              <span className="text-xs font-mono">Tabs</span>
+              <span className="text-xs font-mono">{d?.basePackageUnit ?? ""}</span>
             </div>
             <div className="flex items-center gap-2 pl-1">
-              <input type="radio" name="divisible" className="w-3 h-3" />
+              <input
+                type="radio"
+                name="divisible"
+                defaultChecked={d?.isInfinitelyDivisible ?? false}
+                className="w-3 h-3"
+              />
               <span className="text-xs font-mono">Infinitely divisible</span>
             </div>
           </fieldset>
@@ -258,14 +251,21 @@ export function DispenseTab() {
             <legend className="text-xs font-mono font-bold px-1 ml-1 text-black">Par supply</legend>
             <div className="mt-1 flex flex-col gap-1">
               <label className="text-xs font-mono leading-none">Default par doses, this will override the frequency par defaults:</label>
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[200px] ml-auto block h-5" />
+              <Input
+                value={d?.defaultParDoses != null ? String(d.defaultParDoses) : ""}
+                readOnly
+                className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[200px] ml-auto block h-5"
+              />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-mono leading-none">Maximum par quantity to be dispensed at a time:</label>
-              <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[200px] ml-auto block h-5" />
+              <Input
+                value={d?.maxParQty != null ? String(d.maxParQty) : ""}
+                readOnly
+                className="text-xs font-mono rounded-none border border-[#808080] px-1 w-[200px] ml-auto block h-5"
+              />
             </div>
           </fieldset>
-
 
           {/* Point of Care scan charge setting */}
           <fieldset className="border border-[#808080] p-2 pt-1 rounded-md space-y-1">

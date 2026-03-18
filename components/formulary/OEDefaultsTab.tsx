@@ -2,7 +2,6 @@
 
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -11,59 +10,51 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { FormField } from "./FormField"
+import type { FormularyItem } from "@/lib/types"
 
-export function OEDefaultsTab() {
+interface OEDefaultsTabProps {
+  item: FormularyItem | null
+}
+
+export function OEDefaultsTab({ item }: OEDefaultsTabProps) {
+  const d = item?.oeDefaults
   return (
     <div className="p-2 space-y-2 text-xs font-mono h-full w-fit">
       {/* Row 1: Dose / Route / Frequency / Infuse over */}
       <div className="flex gap-3 items-end">
         <FormField label="Dose:" className="w-28">
           <Input
-            defaultValue="500 mg"
+            value={d?.dose ?? ""}
+            readOnly
             className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border"
           />
         </FormField>
         <FormField label="Route:" className="w-32">
-          <Select defaultValue="oral">
-            <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="text-xs font-mono rounded-none">
-              <SelectItem value="oral">Oral</SelectItem>
-              <SelectItem value="iv">IV</SelectItem>
-              <SelectItem value="im">IM</SelectItem>
-              <SelectItem value="topical">Topical</SelectItem>
-            </SelectContent>
-          </Select>
+          <Input
+            value={d?.route ?? ""}
+            readOnly
+            className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border"
+          />
         </FormField>
         <FormField label="Frequency:" className="w-36">
-          <Select>
-            <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border">
-              <SelectValue placeholder="" />
-            </SelectTrigger>
-            <SelectContent className="text-xs font-mono rounded-none">
-              <SelectItem value="q4h">Q4H</SelectItem>
-              <SelectItem value="q6h">Q6H</SelectItem>
-              <SelectItem value="q8h">Q8H</SelectItem>
-              <SelectItem value="qd">Daily</SelectItem>
-              <SelectItem value="prn">PRN</SelectItem>
-            </SelectContent>
-          </Select>
+          <Input
+            value={d?.frequency ?? ""}
+            readOnly
+            className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border"
+          />
         </FormField>
         <FormField label="Infuse over:">
           <div className="flex gap-1">
             <Input
+              value={d?.infuseOver ?? ""}
+              readOnly
               className="text-xs font-mono rounded-none border-[#808080] px-1 border w-14"
             />
-            <Select>
-              <SelectTrigger className="text-xs font-mono rounded-none border-[#808080] px-1 border w-28">
-                <SelectValue placeholder="" />
-              </SelectTrigger>
-              <SelectContent className="text-xs font-mono rounded-none">
-                <SelectItem value="min">Minutes</SelectItem>
-                <SelectItem value="hr">Hours</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input
+              value={d?.infuseOverUnit ?? ""}
+              readOnly
+              className="text-xs font-mono rounded-none border-[#808080] px-1 border w-28"
+            />
           </div>
         </FormField>
       </div>
@@ -72,22 +63,24 @@ export function OEDefaultsTab() {
       <div className="flex gap-3 items-end">
         <FormField label="Freetext rate:" className="w-36 text-[#808080]">
           <Input
+            value={d?.freetextRate ?? ""}
+            readOnly
             disabled
             className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#D4D0C8]"
           />
         </FormField>
         <FormField label="Normalized rate:" className="w-44 text-[#808080]">
-          <Select disabled>
-            <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#D4D0C8]">
-              <SelectValue placeholder="" />
-            </SelectTrigger>
-            <SelectContent className="text-xs font-mono rounded-none">
-              <SelectItem value="none">-</SelectItem>
-            </SelectContent>
-          </Select>
+          <Input
+            value={d ? `${d.normalizedRate} ${d.normalizedRateUnit}`.trim() : ""}
+            readOnly
+            disabled
+            className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#D4D0C8]"
+          />
         </FormField>
         <FormField label="Rate:" className="w-28 text-[#808080]">
           <Input
+            value={d ? `${d.rate} ${d.rateUnit}`.trim() : ""}
+            readOnly
             disabled
             className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#D4D0C8]"
           />
@@ -99,57 +92,43 @@ export function OEDefaultsTab() {
         <FormField label="Duration:">
           <div className="flex gap-1">
             <Input
-              defaultValue="30"
+              value={d?.duration != null ? String(d.duration) : ""}
+              readOnly
               className="text-xs font-mono rounded-none border-[#808080] px-1 border w-10"
             />
-            <Select defaultValue="days">
-              <SelectTrigger className="text-xs font-mono rounded-none border-[#808080] px-1 border w-24">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="text-xs font-mono rounded-none">
-                <SelectItem value="days">Days</SelectItem>
-                <SelectItem value="hours">Hours</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input
+              value={d?.durationUnit ?? ""}
+              readOnly
+              className="text-xs font-mono rounded-none border-[#808080] px-1 border w-24"
+            />
           </div>
         </FormField>
         <FormField label="Stop type:" className="w-32">
-          <Select defaultValue="hardstop">
-            <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#316AC5] text-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="text-xs font-mono rounded-none">
-              <SelectItem value="hardstop">Hard Stop</SelectItem>
-              <SelectItem value="softstop">Soft Stop</SelectItem>
-              <SelectItem value="none">None</SelectItem>
-            </SelectContent>
-          </Select>
+          <Input
+            value={d?.stopType ?? ""}
+            readOnly
+            className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
+          />
         </FormField>
         <FormField label="PRN:" className="items-center">
-          <Checkbox className="rounded-none border-[#808080] h-4 w-4" />
+          <Checkbox
+            checked={d?.isPrn ?? false}
+            className="rounded-none border-[#808080] h-4 w-4"
+          />
         </FormField>
         <FormField label="PRN reason:" className="w-36">
-          <Select>
-            <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border">
-              <SelectValue placeholder="" />
-            </SelectTrigger>
-            <SelectContent className="text-xs font-mono rounded-none">
-              <SelectItem value="pain">Pain</SelectItem>
-              <SelectItem value="fever">Fever</SelectItem>
-              <SelectItem value="nausea">Nausea</SelectItem>
-            </SelectContent>
-          </Select>
+          <Input
+            value={d?.prnReason ?? ""}
+            readOnly
+            className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border"
+          />
         </FormField>
         <FormField label="Default ordered as:" className="w-36">
-          <Select defaultValue="nodefault">
-            <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#316AC5] text-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="text-xs font-mono rounded-none">
-              <SelectItem value="nodefault">No Default</SelectItem>
-              <SelectItem value="scheduled">Scheduled</SelectItem>
-            </SelectContent>
-          </Select>
+          <Input
+            value={d?.orderedAsSynonym ?? ""}
+            readOnly
+            className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
+          />
         </FormField>
       </div>
 
@@ -161,15 +140,11 @@ export function OEDefaultsTab() {
           />
         </FormField>
         <FormField label="Default screen format:" className="w-40">
-          <Select defaultValue="medication">
-            <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#316AC5] text-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="text-xs font-mono rounded-none">
-              <SelectItem value="medication">Medication</SelectItem>
-              <SelectItem value="iv">IV</SelectItem>
-            </SelectContent>
-          </Select>
+          <Input
+            value={d?.defaultFormat ?? ""}
+            readOnly
+            className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
+          />
         </FormField>
       </div>
 
@@ -182,8 +157,9 @@ export function OEDefaultsTab() {
             <div className="flex gap-4 items-stretch">
               <div className="flex flex-1 gap-2 border border-[#808080]">
                 <textarea
-                  className="flex-1 text-xs font-mono p-1 resize-none border-0 outline-none w-full h-full bg-white"
+                  value={d?.notes1 ?? ""}
                   readOnly
+                  className="flex-1 text-xs font-mono p-1 resize-none border-0 outline-none w-full h-full bg-white"
                 />
                 <div className="border-l border-[#808080] p-1 flex flex-col justify-between w-5 h-full bg-[#D4D0C8]">
                   <button className="text-[10px] leading-none h-1/2 flex items-center justify-center border-b border-[#808080] hover:bg-[#E8E8E0] active:bg-[#B0A898]">▲</button>
@@ -194,15 +170,15 @@ export function OEDefaultsTab() {
                 <legend className="text-xs font-mono px-1 ml-1 text-black">Applies to</legend>
                 <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 mt-0.5">
                   <div className="flex items-center gap-1">
-                    <Checkbox className="rounded-none border-[#808080] h-3 w-3" />
+                    <Checkbox checked={d?.notes1AppliesToFill ?? false} className="rounded-none border-[#808080] h-3 w-3" />
                     <span className="text-xs font-mono whitespace-nowrap">Fill list</span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Checkbox className="rounded-none border-[#808080] h-3 w-3" />
+                    <Checkbox checked={d?.notes1AppliesToMar ?? false} className="rounded-none border-[#808080] h-3 w-3" />
                     <span className="text-xs font-mono whitespace-nowrap">MAR</span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Checkbox className="rounded-none border-[#808080] h-3 w-3" />
+                    <Checkbox checked={d?.notes1AppliesToLabel ?? false} className="rounded-none border-[#808080] h-3 w-3" />
                     <span className="text-xs font-mono whitespace-nowrap">Label</span>
                   </div>
                 </div>
@@ -212,8 +188,9 @@ export function OEDefaultsTab() {
             <div className="flex gap-4 items-stretch mt-2">
               <div className="flex flex-1 gap-2 border border-[#808080]">
                 <textarea
-                  className="flex-1 text-xs font-mono p-1 resize-none border-0 outline-none w-full h-full bg-white"
+                  value={d?.notes2 ?? ""}
                   readOnly
+                  className="flex-1 text-xs font-mono p-1 resize-none border-0 outline-none w-full h-full bg-white"
                 />
                 <div className="border-l border-[#808080] p-1 flex flex-col justify-between w-5 h-full bg-[#D4D0C8]">
                   <button className="text-[10px] leading-none h-1/2 flex items-center justify-center border-b border-[#808080] hover:bg-[#E8E8E0] active:bg-[#B0A898]">▲</button>
@@ -224,15 +201,15 @@ export function OEDefaultsTab() {
                 <legend className="text-xs font-mono px-1 ml-1 text-black">Applies to</legend>
                 <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 mt-0.5">
                   <div className="flex items-center gap-1">
-                    <Checkbox className="rounded-none border-[#808080] h-3 w-3" />
+                    <Checkbox checked={d?.notes2AppliesToFill ?? false} className="rounded-none border-[#808080] h-3 w-3" />
                     <span className="text-xs font-mono whitespace-nowrap">Fill list</span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Checkbox className="rounded-none border-[#808080] h-3 w-3" />
+                    <Checkbox checked={d?.notes2AppliesToMar ?? false} className="rounded-none border-[#808080] h-3 w-3" />
                     <span className="text-xs font-mono whitespace-nowrap">MAR</span>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Checkbox className="rounded-none border-[#808080] h-3 w-3" />
+                    <Checkbox checked={d?.notes2AppliesToLabel ?? false} className="rounded-none border-[#808080] h-3 w-3" />
                     <span className="text-xs font-mono whitespace-nowrap">Label</span>
                   </div>
                 </div>
@@ -245,20 +222,34 @@ export function OEDefaultsTab() {
         <fieldset className="w-36 border border-[#808080] rounded-md p-2 pt-1 pb-3">
           <legend className="text-xs font-mono px-1 ml-1 text-black">Search filter types</legend>
           <div className="space-y-1">
-            {[
-              { label: "Medication", checked: true },
-              { label: "Continuous", checked: false },
-              { label: "TPN", checked: false },
-              { label: "Intermittent", checked: false },
-            ].map((item) => (
-              <div key={item.label} className="flex items-center gap-1">
-                <Checkbox
-                  defaultChecked={item.checked}
-                  className="rounded-none border-[#808080] h-3.5 w-3.5"
-                />
-                <span className="text-xs font-mono">{item.label}</span>
-              </div>
-            ))}
+            <div className="flex items-center gap-1">
+              <Checkbox
+                checked={d?.searchMedication ?? false}
+                className="rounded-none border-[#808080] h-3.5 w-3.5"
+              />
+              <span className="text-xs font-mono">Medication</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Checkbox
+                checked={d?.searchContinuous ?? false}
+                className="rounded-none border-[#808080] h-3.5 w-3.5"
+              />
+              <span className="text-xs font-mono">Continuous</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Checkbox
+                checked={false}
+                className="rounded-none border-[#808080] h-3.5 w-3.5"
+              />
+              <span className="text-xs font-mono">TPN</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Checkbox
+                checked={d?.searchIntermittent ?? false}
+                className="rounded-none border-[#808080] h-3.5 w-3.5"
+              />
+              <span className="text-xs font-mono">Intermittent</span>
+            </div>
           </div>
         </fieldset>
       </div>

@@ -27,24 +27,51 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import type { FormularyItem } from "@/lib/types"
 
-const identifierData = [
-  { id: 1, type: "Brand Name", identifier: "Tylenol", active: true, primary: true },
-  { id: 2, type: "Charge Number", identifier: "54000278", active: true, primary: true },
-  { id: 3, type: "Description", identifier: "acetaminophen 500 mg Tab", active: true, primary: true },
-  { id: 4, type: "Generic Name", identifier: "acetaminophen", active: true, primary: true },
-  { id: 5, type: "Pyxis Interface ID", identifier: "10275", active: true, primary: true },
-  { id: 6, type: "Rx Misc5", identifier: "087701417726", active: true, primary: true },
-  { id: 7, type: "Rx Misc5", identifier: "087701979453", active: true, primary: false },
-  { id: 8, type: "RX Unique ID", identifier: "acetaminophen 500 mg Tab - acetaminophen 500 mg Tab - Active", active: true, primary: true },
-  { id: 9, type: "Short Description", identifier: "acet500Tab", active: true, primary: false },
-  { id: 10, type: "Short Description", identifier: "acetaminophen 500 mg Tab", active: true, primary: true },
-]
+interface IdentifierRow {
+  id: number
+  type: string
+  identifier: string
+  active: boolean
+  primary: boolean
+}
 
-export function IdentifiersTab() {
+interface IdentifiersTabProps {
+  item: FormularyItem | null
+}
+
+function buildRows(item: FormularyItem | null): IdentifierRow[] {
+  if (!item) return []
+  const id = item.identifiers
+  const rows: IdentifierRow[] = []
+  let idx = 1
+
+  const add = (type: string, identifier: string, primary: boolean) => {
+    if (!identifier) return
+    rows.push({ id: idx++, type, identifier, active: true, primary })
+  }
+
+  if (id.brandName) add("Brand Name", id.brandName, id.isBrandPrimary)
+  if (id.brandName2) add("Brand Name", id.brandName2, id.isBrand2Primary)
+  if (id.brandName3) add("Brand Name", id.brandName3, id.isBrand3Primary)
+  add("Charge Number", id.chargeNumber, true)
+  add("Description", id.labelDescription, true)
+  add("Generic Name", id.genericName, true)
+  add("Pyxis Interface ID", id.pyxisId, true)
+  add("HCPCS", id.hcpcsCode, true)
+  add("Mnemonic", id.mnemonic, true)
+
+  return rows
+}
+
+export function IdentifiersTab({ item }: IdentifiersTabProps) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null)
   const [showNewDialog, setShowNewDialog] = useState(false)
-  const [rows, setRows] = useState(identifierData)
+  const [extraRows, setExtraRows] = useState<IdentifierRow[]>([])
+
+  const baseRows = buildRows(item)
+  const rows = [...baseRows, ...extraRows]
 
   return (
     <div className="p-3 text-xs font-mono flex flex-col gap-2 h-full">
@@ -92,14 +119,14 @@ export function IdentifiersTab() {
                 </TableCell>
                 <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] text-center">
                   <Checkbox
-                    defaultChecked={row.active}
+                    checked={row.active}
                     className="rounded-none border-[#808080] h-3.5 w-3.5"
                     onClick={(e) => e.stopPropagation()}
                   />
                 </TableCell>
                 <TableCell className="h-5 px-2 py-0 text-center">
                   <Checkbox
-                    defaultChecked={row.primary}
+                    checked={row.primary}
                     className="rounded-none border-[#808080] h-3.5 w-3.5"
                     onClick={(e) => e.stopPropagation()}
                   />

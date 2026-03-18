@@ -11,33 +11,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import type { FormularyItem } from "@/lib/types"
 
-const supplyData = [
-  { id: 1, selected: true, preferred: true, drugId: "00904-6730-61", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "B", awp: "$0.0444", cost1: "", cost2: "" },
-  { id: 2, selected: false, preferred: false, drugId: "57896-0204-01", innerNdc: "", active: true, manufacturer: "Geri-Care Pharmaceuticals", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "G", awp: "$0.0224", cost1: "", cost2: "" },
-  { id: 3, selected: false, preferred: false, drugId: "57896-0201-10", innerNdc: "", active: true, manufacturer: "Geri-Care Pharmaceuticals", description: "acetaminophen 500 mg Tab", pkg: "1,000...", bio: false, bg: "G", awp: "$0.01758", cost1: "", cost2: "" },
-  { id: 4, selected: false, preferred: false, drugId: "50580-0937-07", innerNdc: "", active: true, manufacturer: "JOHNSON AND JOHNSON", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "B", awp: "", cost1: "", cost2: "" },
-  { id: 5, selected: false, preferred: false, drugId: "71399-8022-02", innerNdc: "", active: true, manufacturer: "AKRON PHARMA INC.", description: "acetaminophen 500 mg Tab", pkg: "1,000...", bio: false, bg: "G", awp: "$0.01775", cost1: "", cost2: "" },
-  { id: 6, selected: false, preferred: false, drugId: "00904-6720-51", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "50 Ea...", bio: false, bg: "G", awp: "$0.0362", cost1: "", cost2: "" },
-  { id: 7, selected: false, preferred: false, drugId: "57896-0222-01", innerNdc: "", active: true, manufacturer: "Geri-Care Pharmaceuticals", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "G", awp: "$0.0103", cost1: "", cost2: "" },
-  { id: 8, selected: false, preferred: false, drugId: "71399-8022-01", innerNdc: "", active: true, manufacturer: "AKRON PHARMA INC.", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "B", awp: "", cost1: "", cost2: "" },
-  { id: 9, selected: false, preferred: false, drugId: "50580-0457-10", innerNdc: "", active: true, manufacturer: "Johnson and Johnson/McN...", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "B", awp: "$0.13834", cost1: "", cost2: "" },
-  { id: 10, selected: false, preferred: false, drugId: "50580-0457-70", innerNdc: "", active: true, manufacturer: "Johnson and Johnson/McN...", description: "acetaminophen 500 mg Tab", pkg: "700 E...", bio: false, bg: "B", awp: "$0.05667", cost1: "", cost2: "" },
-  { id: 11, selected: false, preferred: false, drugId: "71399-8027-02", innerNdc: "", active: true, manufacturer: "AKRON PHARMA INC.", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "B", awp: "", cost1: "", cost2: "" },
-  { id: 12, selected: false, preferred: false, drugId: "00904-6720-80", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "1,000...", bio: false, bg: "G", awp: "$0.01994", cost1: "", cost2: "" },
-  { id: 13, selected: false, preferred: false, drugId: "00904-1988-60", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "G", awp: "$0.0803", cost1: "", cost2: "" },
-  { id: 14, selected: false, preferred: false, drugId: "57896-0221-10", innerNdc: "", active: true, manufacturer: "Geri-Care Pharmaceuticals", description: "acetaminophen 500 mg Tab", pkg: "1,000...", bio: false, bg: "G", awp: "$0.0071", cost1: "", cost2: "" },
-  { id: 15, selected: false, preferred: false, drugId: "00904-6730-60", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "G", awp: "$0.0234", cost1: "", cost2: "" },
-  { id: 16, selected: false, preferred: false, drugId: "00904-6720-40", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "500 E...", bio: false, bg: "G", awp: "$0.01082", cost1: "", cost2: "" },
-  { id: 17, selected: false, preferred: false, drugId: "50580-0457-11", innerNdc: "", active: true, manufacturer: "Johnson and Johnson/McN...", description: "acetaminophen 500 mg Tab", pkg: "10 Ea...", bio: false, bg: "B", awp: "$0.7291", cost1: "", cost2: "" },
-  { id: 18, selected: false, preferred: false, drugId: "69618-0011-01", innerNdc: "", active: true, manufacturer: "Reliable 1 Laboratories, LLC", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "G", awp: "$0.0178", cost1: "", cost2: "" },
-  { id: 19, selected: false, preferred: false, drugId: "00904-6720-59", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "G", awp: "$0.0158", cost1: "", cost2: "" },
-  { id: 20, selected: false, preferred: false, drugId: "00904-6730-80", innerNdc: "", active: true, manufacturer: "Major Pharmaceuticals Inc", description: "acetaminophen 500 mg Tab", pkg: "1,000...", bio: false, bg: "G", awp: "$0.01775", cost1: "", cost2: "" },
-  { id: 21, selected: false, preferred: false, drugId: "50580-0449-09", innerNdc: "", active: true, manufacturer: "Johnson and Johnson/McN...", description: "acetaminophen 500 mg Tab", pkg: "100 E...", bio: false, bg: "B", awp: "$0.0996", cost1: "", cost2: "" },
-]
+interface SupplyTabProps {
+  item: FormularyItem | null
+}
 
-export function SupplyTab() {
-  const [selectedRow, setSelectedRow] = useState<number>(1)
+export function SupplyTab({ item }: SupplyTabProps) {
+  const [selectedNdc, setSelectedNdc] = useState<string | null>(null)
+  const supplyData = item?.supplyRecords ?? []
 
   return (
     <div className="flex flex-col h-full text-xs font-mono">
@@ -63,60 +45,77 @@ export function SupplyTab() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {supplyData.map((row, idx) => (
-              <TableRow
-                key={row.id}
-                className={`border-b border-[#D4D0C8] cursor-pointer h-6 ${
-                  selectedRow === row.id
-                    ? "bg-[#316AC5] text-white"
-                    : idx % 2 === 0
-                    ? "bg-white hover:bg-[#C7D5E8]"
-                    : "bg-[#F0F0F0] hover:bg-[#C7D5E8]"
-                }`}
-                onClick={() => setSelectedRow(row.id)}
-              >
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
-                  {row.id}
-                </TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
-                  <Checkbox
-                    defaultChecked={row.preferred}
-                    className="rounded-none border-[#808080] h-3 w-3"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </TableCell>
-                <TableCell className={`h-5 px-1 py-0 border-r border-[#D4D0C8] font-mono ${selectedRow === row.id ? "bg-white text-[#000080] border border-[#000080]" : ""}`}>
-                  {row.drugId}
-                </TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]"></TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
-                  <Checkbox
-                    defaultChecked={row.active}
-                    className="rounded-none border-[#808080] h-3 w-3"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] truncate max-w-[176px]">{row.manufacturer}</TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] truncate max-w-[176px]">{row.description}</TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">{row.pkg}</TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
-                  {row.bio && <Checkbox defaultChecked className="rounded-none border-[#808080] h-3 w-3" />}
-                </TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">{row.bg}</TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">{row.awp}</TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">{row.cost1}</TableCell>
-                <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">{row.cost2}</TableCell>
-                <TableCell className="h-5 px-1 py-0">
-                  <div className="flex items-center justify-center">
-                    <div className="grid grid-cols-3 gap-px w-6 h-5 border border-[#808080] cursor-pointer hover:bg-[#C7D5E8]">
-                      {[...Array(9)].map((_, i) => (
-                        <div key={i} className="bg-[#808080] w-1 h-1" />
-                      ))}
+            {supplyData.map((row, idx) => {
+              const isSelected = selectedNdc === row.ndc
+              return (
+                <TableRow
+                  key={`${row.ndc}-${idx}`}
+                  className={`border-b border-[#D4D0C8] cursor-pointer h-6 ${
+                    isSelected
+                      ? "bg-[#316AC5] text-white"
+                      : idx % 2 === 0
+                      ? "bg-white hover:bg-[#C7D5E8]"
+                      : "bg-[#F0F0F0] hover:bg-[#C7D5E8]"
+                  }`}
+                  onClick={() => setSelectedNdc(row.ndc)}
+                >
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
+                    {idx + 1}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
+                    <Checkbox
+                      checked={row.isPrimary}
+                      className="rounded-none border-[#808080] h-3 w-3"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </TableCell>
+                  <TableCell className={`h-5 px-1 py-0 border-r border-[#D4D0C8] font-mono ${isSelected ? "bg-white text-[#000080] border border-[#000080]" : ""}`}>
+                    {row.ndc}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    {row.isNonReference ? row.ndc : ""}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
+                    <Checkbox
+                      checked={row.isActive}
+                      className="rounded-none border-[#808080] h-3 w-3"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] truncate max-w-[176px]">
+                    {row.manufacturer}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] truncate max-w-[176px]">
+                    {row.manufacturerLabelDescription}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]"></TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
+                    {row.isBiological && <Checkbox checked className="rounded-none border-[#808080] h-3 w-3" />}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    {row.isBrand ? "B" : "G"}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    {row.awpCost != null ? `$${row.awpCost.toFixed(4)}` : ""}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    {row.cost1 != null ? String(row.cost1) : ""}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    {row.cost2 != null ? String(row.cost2) : ""}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0">
+                    <div className="flex items-center justify-center">
+                      <div className="grid grid-cols-3 gap-px w-6 h-5 border border-[#808080] cursor-pointer hover:bg-[#C7D5E8]">
+                        {[...Array(9)].map((_, i) => (
+                          <div key={i} className="bg-[#808080] w-1 h-1" />
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       </div>

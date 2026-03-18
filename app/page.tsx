@@ -3,14 +3,6 @@
 import { useState, useEffect, useRef } from "react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { OEDefaultsTab } from "@/components/formulary/OEDefaultsTab"
 import { DispenseTab } from "@/components/formulary/DispenseTab"
 import { InventoryTab } from "@/components/formulary/InventoryTab"
@@ -18,6 +10,8 @@ import { ClinicalTab } from "@/components/formulary/ClinicalTab"
 import { SupplyTab } from "@/components/formulary/SupplyTab"
 import { IdentifiersTab } from "@/components/formulary/IdentifiersTab"
 import { FormField } from "@/components/formulary/FormField"
+import { SearchModal } from "@/components/formulary/SearchModal"
+import type { FormularyItem } from "@/lib/types"
 
 type TabId = "oe-defaults" | "dispense" | "inventory" | "clinical" | "supply" | "identifiers" | "tpn-details" | "change-log"
 
@@ -48,6 +42,8 @@ function ToolbarIcon({ children }: { children: React.ReactNode }) {
 export default function PharmNetFormulary() {
   const [activeTab, setActiveTab] = useState<TabId>("oe-defaults")
   const [searchValue, setSearchValue] = useState("")
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
+  const [selectedItem, setSelectedItem] = useState<FormularyItem | null>(null)
   const [dateStr, setDateStr] = useState<string | null>(null)
   const [timeStr, setTimeStr] = useState<string | null>(null)
 
@@ -206,9 +202,14 @@ export default function PharmNetFormulary() {
           <Input
             value={searchValue}
             onChange={(e) => setSearchValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                setIsSearchModalOpen(true)
+              }
+            }}
             className="h-5 text-xs font-mono rounded-none border-[#808080] px-1 py-0 w-40 bg-white"
           />
-          <button className="w-6 h-5 border border-[#808080] bg-[#D4D0C8] flex items-center justify-center text-xs">
+          <button onClick={() => setIsSearchModalOpen(true)} className="w-6 h-5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] flex items-center justify-center text-xs">
             🔍
           </button>
         </div>
@@ -220,19 +221,21 @@ export default function PharmNetFormulary() {
         <div className="flex gap-3 items-end mb-2">
           <FormField label="Description:" required className="flex-1 min-w-0 max-w-[220px]">
             <Input
-              defaultValue="acetaminophen 500 mg Tab"
+              value={selectedItem?.description ?? ""}
+              readOnly
               className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
             />
           </FormField>
           <FormField label="Strength:" required className="w-28">
             <Input
-              defaultValue="500 mg"
+              value={selectedItem ? `${selectedItem.strength} ${selectedItem.strengthUnit}`.trim() : ""}
+              readOnly
               className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
             />
           </FormField>
           <FormField label="Status:" className="w-28">
             <Input
-              defaultValue="Active"
+              value={selectedItem?.status ?? ""}
               disabled
               className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#D4D0C8]"
             />
@@ -247,41 +250,29 @@ export default function PharmNetFormulary() {
         <div className="flex gap-3 items-end">
           <FormField label="Generic:" required className="flex-1 min-w-0 max-w-[220px]">
             <Input
-              defaultValue="acetaminophen"
+              value={selectedItem?.genericName ?? ""}
+              readOnly
               className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
             />
           </FormField>
           <FormField label="Dosage form:" required className="w-28">
-            <Select defaultValue="tab">
-              <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="text-xs font-mono rounded-none">
-                <SelectItem value="tab">Tab</SelectItem>
-                <SelectItem value="cap">Cap</SelectItem>
-                <SelectItem value="liq">Liquid</SelectItem>
-                <SelectItem value="inj">Injection</SelectItem>
-                <SelectItem value="patch">Patch</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input
+              value={selectedItem?.dosageForm ?? ""}
+              readOnly
+              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
+            />
           </FormField>
           <FormField label="Legal status:" required className="w-28">
-            <Select defaultValue="otc">
-              <SelectTrigger className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="text-xs font-mono rounded-none">
-                <SelectItem value="otc">OTC</SelectItem>
-                <SelectItem value="rx">Rx</SelectItem>
-                <SelectItem value="cii">C-II</SelectItem>
-                <SelectItem value="ciii">C-III</SelectItem>
-                <SelectItem value="civ">C-IV</SelectItem>
-              </SelectContent>
-            </Select>
+            <Input
+              value={selectedItem?.legalStatus ?? ""}
+              readOnly
+              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
+            />
           </FormField>
           <FormField label="Mnemonic:" required className="flex-1 min-w-0 max-w-[140px]">
             <Input
-              defaultValue="acetaminophen 5"
+              value={selectedItem?.mnemonic ?? ""}
+              readOnly
               className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
             />
           </FormField>
@@ -309,12 +300,12 @@ export default function PharmNetFormulary() {
 
       {/* Tab content area */}
       <div className="bg-[#D4D0C8] flex-1 flex flex-col border border-[#808080] mx-3 mb-2 overflow-hidden min-h-0">
-        {activeTab === "oe-defaults" && <OEDefaultsTab />}
-        {activeTab === "dispense" && <DispenseTab />}
-        {activeTab === "inventory" && <InventoryTab />}
-        {activeTab === "clinical" && <ClinicalTab />}
-        {activeTab === "supply" && <SupplyTab />}
-        {activeTab === "identifiers" && <IdentifiersTab />}
+        {activeTab === "oe-defaults" && <OEDefaultsTab item={selectedItem} />}
+        {activeTab === "dispense" && <DispenseTab item={selectedItem} />}
+        {activeTab === "inventory" && <InventoryTab item={selectedItem} />}
+        {activeTab === "clinical" && <ClinicalTab item={selectedItem} />}
+        {activeTab === "supply" && <SupplyTab item={selectedItem} />}
+        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} />}
         {activeTab === "tpn-details" && (
           <div className="p-4 text-xs font-mono text-[#808080]">TPN Details tab content</div>
         )}
@@ -333,6 +324,13 @@ export default function PharmNetFormulary() {
           <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{timeStr}</span>
         </div>
       </div>
+      {isSearchModalOpen && (
+        <SearchModal
+          initialSearchValue={searchValue}
+          onClose={() => setIsSearchModalOpen(false)}
+          onSelect={(item) => { setSelectedItem(item); setIsSearchModalOpen(false) }}
+        />
+      )}
     </div>
     </div>
   )
