@@ -15,4 +15,13 @@ out/
 
 # build
 dist/
+output/
 
+# large source data files (Turso is the source of truth)
+data/*.csv
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+.vercel
+.env*.local

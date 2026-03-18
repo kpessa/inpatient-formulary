@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
-import { parseFormulary } from "@/lib/parseFormulary"
+import { getFormularyItem } from "@/lib/db"
 
 export async function GET(req: NextRequest) {
-  const groupId = req.nextUrl.searchParams.get("groupId") ?? ""
-  const all = await parseFormulary()
-  const item = all.find((i) => i.groupId === groupId) ?? null
+  const { searchParams } = req.nextUrl
+  const groupId = searchParams.get("groupId") ?? ""
+  const domain = searchParams.get("domain") ?? undefined
+  const item = await getFormularyItem(groupId, domain)
   return NextResponse.json({ item })
 }

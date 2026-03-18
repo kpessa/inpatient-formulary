@@ -11,6 +11,13 @@ import { SupplyTab } from "@/components/formulary/SupplyTab"
 import { IdentifiersTab } from "@/components/formulary/IdentifiersTab"
 import { FormField } from "@/components/formulary/FormField"
 import { SearchModal } from "@/components/formulary/SearchModal"
+import { ImportModal } from "@/components/formulary/ImportModal"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import type { FormularyItem } from "@/lib/types"
 
 type TabId = "oe-defaults" | "dispense" | "inventory" | "clinical" | "supply" | "identifiers" | "tpn-details" | "change-log"
@@ -43,6 +50,7 @@ export default function PharmNetFormulary() {
   const [activeTab, setActiveTab] = useState<TabId>("oe-defaults")
   const [searchValue, setSearchValue] = useState("")
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
   const [selectedItem, setSelectedItem] = useState<FormularyItem | null>(null)
   const [dateStr, setDateStr] = useState<string | null>(null)
   const [timeStr, setTimeStr] = useState<string | null>(null)
@@ -164,7 +172,25 @@ export default function PharmNetFormulary() {
 
       {/* Menu bar */}
       <div className="flex items-center gap-4 bg-[#D4D0C8] px-2 h-6 border-b border-[#808080] shrink-0">
-        {["Task", "Edit", "View", "Help"].map((item) => (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="text-xs font-mono px-1 hover:bg-[#316AC5] hover:text-white focus:outline-none">
+              Task
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="rounded-none border-[#808080] bg-[#D4D0C8] p-0 font-mono text-xs min-w-[200px] shadow-[2px_2px_0_#000]"
+          >
+            <DropdownMenuItem
+              className="rounded-none px-4 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white"
+              onSelect={() => setIsImportModalOpen(true)}
+            >
+              Import CSV Extract...
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {["Edit", "View", "Help"].map((item) => (
           <button key={item} className="text-xs font-mono px-1 hover:bg-[#316AC5] hover:text-white">
             {item}
           </button>
@@ -330,6 +356,9 @@ export default function PharmNetFormulary() {
           onClose={() => setIsSearchModalOpen(false)}
           onSelect={(item) => { setSelectedItem(item); setIsSearchModalOpen(false) }}
         />
+      )}
+      {isImportModalOpen && (
+        <ImportModal onClose={() => setIsImportModalOpen(false)} />
       )}
     </div>
     </div>
