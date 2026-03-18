@@ -14,9 +14,9 @@ import { FormField } from "./FormField"
 
 export function DispenseTab() {
   return (
-    <div className="p-3 text-xs font-mono">
+    <div className="p-3 text-xs font-mono w-fit">
       {/* Main two-column layout */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-[auto_auto] gap-x-8 gap-y-4">
         
         {/* LEFT COLUMN */}
         <div className="space-y-3">

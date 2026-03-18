@@ -14,7 +14,7 @@ import { FormField } from "./FormField"
 
 export function OEDefaultsTab() {
   return (
-    <div className="p-2 space-y-2 text-xs font-mono h-full">
+    <div className="p-2 space-y-2 text-xs font-mono h-full w-fit">
       {/* Row 1: Dose / Route / Frequency / Infuse over */}
       <div className="flex gap-3 items-end">
         <FormField label="Dose:" className="w-28">
