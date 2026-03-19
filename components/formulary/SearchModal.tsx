@@ -43,55 +43,11 @@ interface SearchModalProps {
   onSelect: (item: FormularyItem) => void
 }
 
-const ALL_FACILITIES = [
-  "A & G Logistics",
-  "ABM Main",
-  "Advanced Testing Solutions LLC Good will",
-  "AIK- Spectra Laboratories",
-  "AIK-ARCPoint",
-  "AIK-BCN",
-  "AIK-BnI",
-  "AIK-BstnHrtDiag",
-  "AIK-Cardiodx",
-  "AIK-Dr.Page",
-  "AIK-DRMBrickman",
-  "AIK-LAB CORP",
-  "AIK-LightBoA",
-  "AIK-RadOnc",
-  "AIK Centers",
-  "AIKB Psych",
-  "AIKE Emp Health",
-  "AIKS - ER at Sweetwater",
-  "Aiken County Human Resources",
-  "Aiken County Sheriff's Office",
-  "Aiken Professional Association, LLC",
-  "Aiken Professional Billing",
-  "Anchor Hospital-BH",
-  "Brooke Glen Behavioral Hospital",
-  "CHR- Main",
-  "CHRB- Cedar Hill Regional Behavioral Hea",
-  "EPBH FAIRMOUNT",
-  "EPBH FAIRMOUNT RTC",
-  "Fort Lauderdale Behavioral Health",
-  "GW Hospital",
-  "GW Psych",
-  "GWU Liver and Pancreas",
-  "GWU Spine and Pain",
-  "GWU Transplant",
-  "GWUW Wound",
-  "Hampton Behavioral Health Center",
-  "LWR Main",
-  "MMH Main",
-  "MMHB Psych",
-  "Peachford Hospital-BH",
-  "Psychiatric Institute of Washington",
-  "Summit Ridge Hospital-BH",
-  "UHS Corp",
-  "UHSB",
-  "UHST",
-  "Windmoor Healthcare of Clearwater",
-  "WRM Center",
-]
+const CACHE_VERSION = 'v1'
+const LS_CACHE_PREFIX = `pharmnet-search-cache:${CACHE_VERSION}:`
+
+const CORP_FACILITIES = new Set(["UHS Corp", "UHST", "UHSB"])
+
 
 const DEFAULT_COLUMNS = [
   { name: "Product Type", checked: false },
@@ -114,16 +70,54 @@ const DEFAULT_COLUMNS = [
   { name: "QOH Location 2", checked: false },
 ]
 
+const IDENTIFIER_FIELDS = [
+  { label: 'Description',        field: 'description'   as const },
+  { label: 'Generic name',       field: 'generic_name'  as const },
+  { label: 'Brand name',         field: 'brand_name'    as const },
+  { label: 'Mnemonic',           field: 'mnemonic'      as const },
+  { label: 'Charge number',      field: 'charge_number' as const },
+  { label: 'NDC',                field: 'ndc'           as const },
+  { label: 'Pyxis Interface ID', field: 'pyxis_id'      as const },
+]
+
+function classifyActiveFields(q: string, activeFields: Set<string>): Set<string> {
+  const allDigits = /^\d+$/.test(q)
+  const looksLikeNdc =
+    (allDigits && q.length >= 10) ||
+    /^\d{1,5}-\d{1,4}(-\d{0,2})?$/.test(q)
+
+  let candidates: string[]
+  if (looksLikeNdc) {
+    candidates = ['ndc']
+  } else if (allDigits) {
+    candidates = ['charge_number', 'pyxis_id']
+  } else {
+    candidates = ['description', 'generic_name', 'brand_name', 'mnemonic']
+  }
+  return new Set(candidates.filter(f => activeFields.has(f)))
+}
+
 export function SearchModal({ onClose, initialSearchValue = "", scope: initialScope, availableDomains, onSelect }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState(initialSearchValue)
   const [scope, setScope] = useState<Scope>(initialScope)
+  const [activeFields, setActiveFields] = useState<Set<string>>(
+    () => new Set(['description', 'generic_name', 'brand_name', 'mnemonic', 'charge_number', 'pyxis_id', 'ndc'])
+  )
 
+  // Per-field query status (parallel mode only)
+  type FieldStatus = { state: 'loading' | 'done'; count: number; ms: number; limit: number }
+  const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({})
   // Results state
   const [results, setResults] = useState<SearchResult[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [isExpanding, setIsExpanding] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [fromCachedAt, setFromCachedAt] = useState<number | null>(null)
+  const searchCache = useRef<Map<string, { results: SearchResult[]; total: number; cachedAt: number }>>(new Map())
   const [total, setTotal] = useState(0)
+  const [pendingTotal, setPendingTotal] = useState<number | null>(null)
   const [selectedResultIdx, setSelectedResultIdx] = useState<number | null>(null)
   const [queryMs, setQueryMs] = useState<number | null>(null)
   const [elapsedSec, setElapsedSec] = useState<number | null>(null)
@@ -168,8 +162,10 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     } catch { return false }
   })
   const [showTpnOnly, setShowTpnOnly] = useState(false)
+  const [allFacilities, setAllFacilities] = useState<string[]>([])
+  const [facilitiesLoading, setFacilitiesLoading] = useState(true)
   const [availableFacs, setAvailableFacs] = useState<string[]>([])
-  const [selectedFacs, setSelectedFacs] = useState<string[]>([...ALL_FACILITIES])
+  const [selectedFacs, setSelectedFacs] = useState<string[]>([])
   const [highlightedAvail, setHighlightedAvail] = useState<string | null>(null)
   const [highlightedSel, setHighlightedSel] = useState<string | null>(null)
 
@@ -203,6 +199,18 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       setIsMaximized(true)
     }
   }
+
+  // Load facilities from DB on mount
+  useEffect(() => {
+    fetch('/api/formulary/facilities')
+      .then(r => r.json())
+      .then(({ facilities }: { facilities: string[] }) => {
+        setAllFacilities(facilities)
+        setSelectedFacs(facilities)
+      })
+      .catch(() => {})
+      .finally(() => setFacilitiesLoading(false))
+  }, [])
 
   // Persist settings to localStorage
   useEffect(() => {
@@ -387,11 +395,12 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     setIsLoading(true)
     setSelectedResultIdx(null)
     setQueryMs(null)
+    setFromCachedAt(null)
     setColFilters({})
     setElapsedSec(null)
+    setFieldStatus({})
     const t0 = performance.now()
     searchStartRef.current = t0
-    // Delay 1 s before showing elapsed time; then update every second
     const showAfter = setTimeout(() => {
       setElapsedSec(1)
       elapsedTimerRef.current = setInterval(() => {
@@ -399,8 +408,153 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       }, 1000)
     }, 1000)
     try {
+      const hasFacilityFilter = selectedFacs.length < allFacilities.length
+      const isWildcard = searchValue.includes('*')
+      const useParallel = !hasFacilityFilter && !isWildcard && activeFields.size > 0 && searchValue.trim().length > 0
+
+      // Base params shared by both paths
+      const baseParams = new URLSearchParams({ q: searchValue, limit: String(maxResults) })
+      if (hasFacilityFilter) baseParams.set("facilities", selectedFacs.join(","))
+      if (!showInactive) baseParams.set("showInactive", "false")
+      if (scope.type === 'domain') { baseParams.set('region', scope.region); baseParams.set('environment', scope.env) }
+      else if (scope.type === 'region') baseParams.set('region', scope.region)
+      else if (scope.type === 'env') baseParams.set('environment', scope.env)
+
+      // For parallel path, classify which fields to actually query based on input format
+      const fieldsToQuery = useParallel ? classifyActiveFields(searchValue, activeFields) : new Set<string>()
+
+      // Stable cache key: sorted fields suffix for parallel, base params for single-query
+      const cacheKey = useParallel
+        ? `${baseParams}&fields=${[...fieldsToQuery].sort().join(',')}`
+        : baseParams.toString()
+
+      // L1: in-memory
+      let cached = searchCache.current.get(cacheKey)
+      // L2: localStorage
+      if (!cached) {
+        try {
+          const raw = localStorage.getItem(LS_CACHE_PREFIX + cacheKey)
+          if (raw) { cached = JSON.parse(raw); searchCache.current.set(cacheKey, cached!) }
+        } catch { /* ignore */ }
+      }
+
+      if (cached) {
+        setResults(cached.results)
+        setTotal(cached.total)
+        setFromCachedAt(cached.cachedAt)
+      } else if (useParallel) {
+        // ── Parallel path: one fetch per field, results trickle in as each resolves ──
+        if (fieldsToQuery.size === 0) {
+          setResults([])
+          setTotal(0)
+          setQueryMs(Math.round(performance.now() - t0))
+        } else {
+        setResults([])
+        setFieldStatus(Object.fromEntries([...fieldsToQuery].map(f =>
+          [f, { state: 'loading' as const, count: 0, ms: 0, limit: maxResults }]
+        )))
+
+        const fieldResults: Record<string, SearchResult[]> = {}
+        const fieldFetches = [...fieldsToQuery].map(field => {
+          const fp = new URLSearchParams([...baseParams.entries(), ['fields', field]])
+          return fetch(`/api/formulary/search?${fp}`)
+            .then(r => r.text())
+            .then(text => {
+              const chunk = JSON.parse(text.trim()) as { field: string; results: SearchResult[]; ms: number; rawCount: number }
+              fieldResults[chunk.field] = chunk.results
+              setResults(prev => {
+                const existingIds = new Set(prev.map(r => r.groupId))
+                const fresh = chunk.results.filter(r => !existingIds.has(r.groupId))
+                return [...prev, ...fresh]
+              })
+              setFieldStatus(prev => ({
+                ...prev,
+                [chunk.field]: { state: 'done', count: chunk.rawCount, ms: chunk.ms, limit: maxResults },
+              }))
+            })
+        })
+
+        await Promise.all(fieldFetches)
+
+        // Deduplicate merged results for cache
+        const seen = new Set<string>()
+        const finalResults = Object.values(fieldResults).flat().filter(r => {
+          if (seen.has(r.groupId)) return false
+          seen.add(r.groupId)
+          return true
+        })
+        const finalTotal = finalResults.length
+        setTotal(finalTotal)
+        setQueryMs(Math.round(performance.now() - t0))
+
+        const entry = { results: finalResults, total: finalTotal, cachedAt: Date.now() }
+        searchCache.current.set(cacheKey, entry)
+        try { localStorage.setItem(LS_CACHE_PREFIX + cacheKey, JSON.stringify(entry)) } catch { /* quota */ }
+        } // end else (fieldsToQuery.size > 0)
+      } else {
+        // ── Single-query path: NDJSON stream (wildcard / facility filter) ─────
+        const res = await fetch(`/api/formulary/search?${baseParams}`)
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buf = ''
+        let finalResults: SearchResult[] = []
+        let finalTotal = 0
+        outer: while (true) {
+          const { done, value } = await reader.read()
+          if (value) buf += decoder.decode(value, { stream: !done })
+          const lines = buf.split('\n')
+          buf = lines.pop()!
+          for (const line of lines) {
+            if (!line.trim()) continue
+            const chunk = JSON.parse(line)
+            if ('results' in chunk) { finalResults = chunk.results; finalTotal = chunk.total }
+            else if ('total' in chunk) { setPendingTotal(chunk.total) }
+          }
+          if (done) break outer
+        }
+        const elapsed = Math.round(performance.now() - t0)
+        const entry = { results: finalResults, total: finalTotal, cachedAt: Date.now() }
+        searchCache.current.set(cacheKey, entry)
+        try { localStorage.setItem(LS_CACHE_PREFIX + cacheKey, JSON.stringify(entry)) } catch { /* quota */ }
+        setResults(finalResults)
+        setTotal(finalTotal)
+        setQueryMs(elapsed)
+      }
+    } finally {
+      clearTimeout(showAfter)
+      if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null }
+      setElapsedSec(null)
+      setPendingTotal(null)
+      setIsLoading(false)
+    }
+  }
+
+  const getCellText = (colId: string, r: SearchResult): string => {
+    switch (colId) {
+      case 'domain':      return `${r.region}/${r.environment}`
+      case 'order':       return [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].filter(Boolean).join('')
+      case 'facility':    return r.activeFacilities.join(', ')
+      case 'charge':      return r.chargeNumber
+      case 'pyxis':       return r.pyxisId
+      case 'mnemonic':    return r.mnemonic
+      case 'generic':     return r.genericName
+      case 'strength':    return [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(' ').trim()
+      case 'description': return r.description
+      case 'brand':       return r.brandName
+      default:            return ''
+    }
+  }
+
+  // Auto-kick search when modal opens with a pre-filled value
+  useEffect(() => {
+    if (initialSearchValue.trim()) handleSearch()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleExpandSearch = async () => {
+    setIsExpanding(true)
+    try {
       const params = new URLSearchParams({ q: searchValue, limit: String(maxResults) })
-      if (selectedFacs.length < ALL_FACILITIES.length) {
+      if (selectedFacs.length < allFacilities.length) {
         params.set("facilities", selectedFacs.join(","))
       }
       if (!showInactive) params.set("showInactive", "false")
@@ -412,17 +566,23 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       } else if (scope.type === 'env') {
         params.set('environment', scope.env)
       }
+      for (const [colId, filter] of Object.entries(colFilters)) {
+        if (filter.text) params.set(`cft_${colId}`, filter.text)
+        if ((filter.selected?.size ?? 0) > 0) params.set(`cfv_${colId}`, [...(filter.selected ?? new Set())].join(','))
+      }
       const res = await fetch(`/api/formulary/search?${params}`)
       const data = await res.json()
-      const elapsed = Math.round(performance.now() - t0)
-      setResults(data.results)
-      setTotal(data.total)
-      setQueryMs(elapsed)
+      const existingIds = new Set(results.map(r => r.groupId))
+      const newOnes = (data.results as SearchResult[]).filter(r => !existingIds.has(r.groupId))
+      if (newOnes.length > 0) {
+        const merged = [...results, ...newOnes]
+        setResults(merged)
+        setTotal(merged.length)
+      } else {
+        setTotal(results.length)
+      }
     } finally {
-      clearTimeout(showAfter)
-      if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null }
-      setElapsedSec(null)
-      setIsLoading(false)
+      setIsExpanding(false)
     }
   }
 
@@ -501,12 +661,18 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     switch (colId) {
       case "domain":      return `${r.region} ${r.environment}`
       case "order":       return [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].join('')
-      case "facility":    return r.activeFacilities[0] ?? ""
+      case "facility":    return String(r.activeFacilities.filter(f => !CORP_FACILITIES.has(f)).length).padStart(4, '0')
       case "charge":      return r.chargeNumber
       case "pyxis":       return r.pyxisId
       case "mnemonic":    return r.mnemonic
       case "generic":     return r.genericName
-      case "strength":    return `${r.strength} ${r.strengthUnit} ${r.dosageForm}`.trim()
+      case "strength": {
+        const str = `${r.strength} ${r.strengthUnit} ${r.dosageForm}`.trim()
+        const match = str.replace(/,(\d)/g, '$1').match(/(\d+(?:\.\d+)?)/)
+        const num = match ? parseFloat(match[1]) : 0
+        const [intPart, decPart] = num.toFixed(4).split('.')
+        return intPart.padStart(8, '0') + '.' + decPart
+      }
       case "description": return r.description
       case "brand":       return r.brandName
       default:            return ""
@@ -515,20 +681,32 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
 
   const getFilterKey = (r: SearchResult, colId: string): string => {
     if (colId === 'strength') return r.dosageForm
+    if (colId === 'facility') {
+      const rf = r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
+      if (rf.length === 0) return r.activeFacilities.length > 0 ? 'corp only' : ''
+      if (rf.length === 1) return rf[0]
+      return `${rf.length} facilities`
+    }
     return getSortValue(r, colId)
   }
 
   const filteredResults = useMemo(() => {
     const activeFilters = Object.entries(colFilters).filter(
-      ([, f]) => f.text || f.selected.size > 0
+      ([, f]) => f.text || (f.selected?.size ?? 0) > 0
     )
     if (activeFilters.length === 0) return results
     return results.filter(r =>
       activeFilters.every(([colId, filter]) => {
-        const cellVal = getSortValue(r, colId).toLowerCase()
+        const cellVal = colId === 'facility'
+          ? r.activeFacilities.filter(f => !CORP_FACILITIES.has(f)).join(' ').toLowerCase()
+          : getSortValue(r, colId).toLowerCase()
         const textPass = !filter.text || cellVal.includes(filter.text.toLowerCase())
         const selectPass =
-          filter.selected.size === 0 || filter.selected.has(getFilterKey(r, colId))
+          (filter.selected?.size ?? 0) === 0 || (
+            colId === 'facility'
+              ? r.activeFacilities.filter(f => !CORP_FACILITIES.has(f)).some(f => filter.selected?.has(f))
+              : filter.selected?.has(getFilterKey(r, colId)) ?? false
+          )
         return textPass && selectPass
       })
     )
@@ -548,7 +726,9 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     ? (colFilters[filterPanel.colId] ?? { text: "", selected: new Set<string>() })
     : null
   const fpAllValues = filterPanel
-    ? [...new Set(results.map(r => getFilterKey(r, filterPanel.colId)))].sort()
+    ? filterPanel.colId === 'facility'
+      ? [...new Set(results.flatMap(r => r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))))].sort()
+      : [...new Set(results.map(r => getFilterKey(r, filterPanel.colId)))].sort()
     : []
   const fpVisibleValues = filterPanel && filterPanelSearch
     ? fpAllValues.filter(v => v.toLowerCase().includes(filterPanelSearch.toLowerCase()))
@@ -635,27 +815,38 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                 <fieldset className="border border-gray-300 p-2 pt-3 relative">
                   <legend className="absolute -top-2 left-2 px-1 bg-[#F0F0F0] text-xs">Identifiers</legend>
                   <div className="flex flex-wrap gap-x-4 gap-y-2">
-                    {["Generic name", "Brand name", "Mnemonic", "Description", "Charge number", "NDC"].map(label => (
-                      <label key={label} className="flex items-center gap-1 cursor-pointer">
-                        <Checkbox defaultChecked className="h-3 w-3 rounded-none border-[#808080] bg-white outline-none ring-0 shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
-                        <span>{label}</span>
-                      </label>
-                    ))}
-                    <div className="flex items-center gap-1">
-                      <label className="flex items-center gap-1 cursor-pointer">
-                        <Checkbox defaultChecked className="h-3 w-3 rounded-none border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
-                        <span>Other:</span>
-                      </label>
-                      <span className="text-red-600 font-bold">*</span>
-                      <Select defaultValue="pyxis">
-                        <SelectTrigger className="h-5 py-0 px-1 text-xs font-sans rounded-none border-[#808080] bg-white w-32 border shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="text-xs font-sans rounded-none">
-                          <SelectItem value="pyxis">Pyxis Interface ID</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    {IDENTIFIER_FIELDS.map(({ label, field }) => {
+                      const fs = field ? fieldStatus[field] : undefined
+                      return (
+                        <label
+                          key={label}
+                          className={`flex items-center gap-1 ${field ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                        >
+                          <Checkbox
+                            checked={field ? activeFields.has(field) : false}
+                            disabled={!field}
+                            onCheckedChange={field ? (checked) => {
+                              setActiveFields(prev => {
+                                const next = new Set(prev)
+                                if (checked) next.add(field)
+                                else next.delete(field)
+                                return next
+                              })
+                            } : undefined}
+                            className="h-3 w-3 rounded-none border-[#808080] bg-white outline-none ring-0 shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]"
+                          />
+                          <span>{label}</span>
+                          {fs?.state === 'loading' && (
+                            <span className="text-[10px] text-[#808080] animate-pulse">…</span>
+                          )}
+                          {fs?.state === 'done' && (
+                            <span className="text-[10px] text-[#808080]">
+                              {fs.count >= fs.limit ? `${fs.count}+` : fs.count} · {fs.ms}ms
+                            </span>
+                          )}
+                        </label>
+                      )
+                    })}
                   </div>
                 </fieldset>
 
@@ -767,15 +958,13 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                       <div className="w-32 h-3 border border-[#808080] bg-[#D4D0C8] overflow-hidden relative">
                         <div className="absolute top-0 bottom-0 w-10 bg-[#316AC5] animate-[marquee_1.4s_linear_infinite]" />
                       </div>
-                      <span>{elapsedSec !== null ? `${elapsedSec}s…` : 'Searching…'}</span>
+                      <span>{pendingTotal !== null ? `Found ${pendingTotal}${elapsedSec !== null ? ` — ${elapsedSec}s…` : ' — loading…'}` : elapsedSec !== null ? `${elapsedSec}s…` : 'Searching…'}</span>
                     </div>
                   </>
                 ) : (
                   <>
                     <span className="flex items-center gap-1.5">
-                      {total === -1
-                        ? `Showing first ${results.length} results — refine to narrow.`
-                        : total > results.length
+                      {total > results.length
                         ? `Showing ${results.length} of ${total} results — refine to narrow.`
                         : results.length > 0
                         ? `${results.length} result${results.length !== 1 ? 's' : ''}.`
@@ -792,14 +981,34 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                           >
                             ×
                           </button>
+                          {total > results.length && (
+                            <button
+                              onClick={handleExpandSearch}
+                              className="text-[#316AC5] hover:underline text-[10px]"
+                              title="Re-run search with these column filters applied at the database level to find more matches"
+                            >
+                              Expand in DB ↻
+                            </button>
+                          )}
                         </>
                       )}
                     </span>
-                    {queryMs !== null && (
+                    {isExpanding ? (
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-16 h-2 border border-[#808080] bg-[#D4D0C8] overflow-hidden relative">
+                          <div className="absolute top-0 bottom-0 w-5 bg-[#316AC5] animate-[marquee_1.4s_linear_infinite]" />
+                        </div>
+                        <span>Finding more…</span>
+                      </div>
+                    ) : fromCachedAt !== null ? (
+                      <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0] text-[#808080]" title={`Cached at ${new Date(fromCachedAt).toLocaleTimeString()}`}>
+                        {(() => { const age = Date.now() - fromCachedAt; return age < 60_000 ? 'cached <1m ago' : age < 3_600_000 ? `cached ${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `cached ${Math.round(age / 3_600_000)}h ago` : `cached ${Math.round(age / 86_400_000)}d ago` })()}
+                      </span>
+                    ) : queryMs !== null ? (
                       <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0]">
                         {queryMs >= 1000 ? `${(queryMs / 1000).toFixed(1)}s` : `${queryMs}ms`}
                       </span>
-                    )}
+                    ) : null}
                   </>
                 )}
               </div>
@@ -817,7 +1026,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                       {cols.map((col, i) => {
                         const isDragging = colDrag?.from === i
                         const isDropTarget = colDrag !== null && colDrag.to === i && colDrag.from !== i
-                        const isFiltered = !!(colFilters[col.id] && (colFilters[col.id].text || colFilters[col.id].selected.size > 0))
+                        const isFiltered = !!(colFilters[col.id] && (colFilters[col.id].text || (colFilters[col.id].selected?.size ?? 0) > 0))
                         return (
                           <th
                             key={col.id}
@@ -892,13 +1101,25 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                       sortedResults.map((r, idx) => {
                         const isSelected = selectedResultIdx === idx
                         const strengthForm = [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(" ").trim()
-                        const facCount = r.activeFacilities.length
-                        const facDisplay = facCount === 0 ? "" : facCount === 1 ? r.activeFacilities[0] : "Multiple"
+                        const realFacs = r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
+                        const facCount = realFacs.length
+                        const facDisplay = facCount === 0 ? "" : facCount === 1 ? realFacs[0] : "Multiple"
                         return (
                           <tr
                             key={`${r.groupId}-${idx}`}
                             onClick={() => setSelectedResultIdx(idx)}
                             onDoubleClick={() => { setSelectedResultIdx(idx); handleOkForGroup(r.groupId) }}
+                            onContextMenu={(e) => {
+                              e.preventDefault()
+                              const td = (e.target as HTMLElement).closest('td')
+                              if (!td) return
+                              const tds = Array.from(td.parentElement!.querySelectorAll('td'))
+                              const tdIdx = tds.indexOf(td)
+                              if (tdIdx < 1) return
+                              const col = cols[tdIdx - 1]
+                              if (!col) return
+                              setCtxMenu({ x: e.clientX, y: e.clientY, text: getCellText(col.id, r) })
+                            }}
                             className={`border-b border-[#E0E0E0] cursor-pointer ${
                               isSelected
                                 ? "bg-[#316AC5] text-white"
@@ -929,15 +1150,27 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                 case "facility":
                                   return (
                                     <td key={col.id} className="px-2 py-0.5 max-w-0 relative group">
-                                      {facCount > 1 ? (
+                                      {facilitiesLoading && facCount === 0 && r.activeFacilities.length === 0 ? (
+                                        <span className="text-[#A0A0A0] italic">loading…</span>
+                                      ) : facCount === 0 && r.activeFacilities.length === 0 ? null : facCount === 0 ? (
+                                        <span className={`text-[10px] italic ${isSelected ? "text-white/50" : "text-[#B0B0B0]"}`}>corp only</span>
+                                      ) : facCount === 1 ? (
+                                        <span className="truncate block">{realFacs[0]}</span>
+                                      ) : (
                                         <>
-                                          <span className={`underline decoration-dashed cursor-default ${isSelected ? "decoration-white bg-[#4a7fd4]" : "decoration-[#808080] bg-[#FFFFE1]"} px-1`}>Multiple</span>
-                                          <div className="hidden group-hover:block absolute left-0 top-full bg-[#FFFFE1] border border-black p-1 shadow z-[9999] min-w-[120px] text-black text-xs">
-                                            {r.activeFacilities.map(f => <div key={f}>{f}</div>)}
+                                          <div className="flex gap-px items-center w-full overflow-hidden">
+                                            {realFacs.map(f => (
+                                              <div
+                                                key={f}
+                                                className={`flex-1 h-2 min-w-[2px] max-w-[8px] rounded-[1px] ${isSelected ? "bg-white/80" : "bg-[#316AC5]"}`}
+                                              />
+                                            ))}
+                                          </div>
+                                          <div className="hidden group-hover:block absolute left-full top-2 ml-1 bg-[#FFFFE1] border border-black p-1 shadow z-[9999] min-w-[140px] text-black text-xs whitespace-nowrap">
+                                            <div className="font-bold mb-0.5 border-b border-[#C0C0C0] pb-0.5">{facCount} facilities</div>
+                                            {realFacs.map(f => <div key={f}>{f}</div>)}
                                           </div>
                                         </>
-                                      ) : (
-                                        <span>{facDisplay}</span>
                                       )}
                                     </td>
                                   )
@@ -968,6 +1201,26 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                   </tbody>
                 </table>
               </div>
+
+              {/* Context menu */}
+              {ctxMenu && (
+                <>
+                  <div className="fixed inset-0 z-[9998]" onClick={() => setCtxMenu(null)} />
+                  <div
+                    style={{ position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 9999 }}
+                    className="bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] text-xs font-sans py-0.5 min-w-[120px]"
+                    onMouseDown={e => e.stopPropagation()}
+                  >
+                    <button
+                      className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap disabled:text-[#A0A0A0]"
+                      disabled={!ctxMenu.text}
+                      onClick={() => { navigator.clipboard.writeText(ctxMenu.text); setCtxMenu(null) }}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </>
+              )}
 
               {/* Filter Panel overlay — fixed position, outside table overflow */}
               {filterPanel && fpFilter && (() => {
@@ -1121,7 +1374,9 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                   <div className="flex flex-col flex-1 min-h-0 min-w-0">
                     <span className="text-xs mb-1">Available:</span>
                     <div className="flex-1 border border-[#808080] bg-white overflow-y-auto shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)]">
-                      {availableFacs.map(fac => (
+                      {facilitiesLoading ? (
+                        <div className="px-1.5 py-1 text-[#808080] text-xs italic">Loading…</div>
+                      ) : availableFacs.map(fac => (
                         <div
                           key={fac}
                           onClick={() => setHighlightedAvail(fac)}
@@ -1162,7 +1417,9 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                   <div className="flex flex-col flex-1 min-h-0 min-w-0">
                     <span className="text-xs mb-1">Selected:</span>
                     <div className="flex-1 border border-[#808080] bg-white overflow-y-auto shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)]">
-                      {selectedFacs.map(fac => (
+                      {facilitiesLoading ? (
+                        <div className="px-1.5 py-1 text-[#808080] text-xs italic">Loading…</div>
+                      ) : selectedFacs.map(fac => (
                         <div
                           key={fac}
                           onClick={() => setHighlightedSel(fac)}
@@ -1196,6 +1453,26 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                     className="w-14 h-5 text-xs px-1 border border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus:outline-none"
                   />
                   <span>products at a time.</span>
+                </div>
+              </fieldset>
+
+              {/* Cache */}
+              <fieldset className="border border-[#808080] px-3 pb-2 pt-1 relative shrink-0 bg-white shadow-[inset_1px_1px_0_#FFFFFF]">
+                <legend className="px-1 text-xs bg-white">Cache</legend>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span>Results are cached until a new extract is uploaded.</span>
+                  <button
+                    onClick={() => {
+                      searchCache.current.clear()
+                      Object.keys(localStorage)
+                        .filter(k => k.startsWith('pharmnet-search-cache:'))
+                        .forEach(k => localStorage.removeItem(k))
+                      setFromCachedAt(null)
+                    }}
+                    className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+                  >
+                    Clear Cache
+                  </button>
                 </div>
               </fieldset>
 
