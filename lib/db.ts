@@ -249,7 +249,7 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
   if (params.field === 'ndc') {
     const ndcConditions: string[] = [`sr.ndc LIKE ?`]
     const ndcArgs: (string | number)[] = [`${params.q}%`]
-    if (!params.showInactive) ndcConditions.push("fg.status = 'Active'")
+    // status filter omitted — client filters via showInactive; avoids blocking idx_sr_ndc
     if (params.region)      { ndcConditions.push('fg.region = ?');      ndcArgs.push(params.region) }
     if (params.environment) { ndcConditions.push('fg.environment = ?'); ndcArgs.push(params.environment) }
     ndcArgs.push(params.limit)
@@ -267,7 +267,7 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
     return rows.map(mapRow)
   }
 
-  if (!params.showInactive) conditions.push("status = 'Active'")
+  // status filter omitted — client filters via showInactive; avoids blocking the field index
   if (params.region)      { conditions.push('region = ?');      sqlArgs.push(params.region) }
   if (params.environment) { conditions.push('environment = ?'); sqlArgs.push(params.environment) }
 
@@ -319,7 +319,7 @@ export async function searchByFields(
       const conds: string[] = []
       const fieldArgs: (string | number)[] = []
 
-      if (!showInactive) conds.push("status = 'Active'")
+      // status filter omitted — client filters via showInactive; avoids blocking the field index
       if (region)      { conds.push('region = ?');      fieldArgs.push(region) }
       if (environment) { conds.push('environment = ?'); fieldArgs.push(environment) }
 
@@ -354,7 +354,7 @@ export async function searchByFields(
   if (hasNdc) {
     const ndcConds: string[] = ['sr.ndc LIKE ?']
     const ndcArgs: (string | number)[] = [`${q}%`]
-    if (!showInactive) ndcConds.push("fg.status = 'Active'")
+    // status filter omitted — client filters via showInactive; avoids blocking idx_sr_ndc
     if (region)      { ndcConds.push('fg.region = ?');      ndcArgs.push(region) }
     if (environment) { ndcConds.push('fg.environment = ?'); ndcArgs.push(environment) }
     ndcArgs.push(limit)

@@ -761,11 +761,14 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   }
 
   const filteredResults = useMemo(() => {
+    // Status filter: field-search queries no longer include status = 'Active' in SQL
+    // (it blocked the field indexes), so we filter here instead.
+    const statusFiltered = showInactive ? results : results.filter(r => r.status === 'Active')
     const activeFilters = Object.entries(colFilters).filter(
       ([, f]) => f.text || (f.selected?.size ?? 0) > 0
     )
-    if (activeFilters.length === 0) return results
-    return results.filter(r =>
+    if (activeFilters.length === 0) return statusFiltered
+    return statusFiltered.filter(r =>
       activeFilters.every(([colId, filter]) => {
         const cellVal = colId === 'facility'
           ? r.activeFacilities.filter(f => !CORP_FACILITIES.has(f)).join(' ').toLowerCase()
@@ -780,7 +783,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         return textPass && selectPass
       })
     )
-  }, [results, colFilters])
+  }, [results, colFilters, showInactive])
 
   const baseResults = useMemo((): UnifiedResult[] => {
     if (!isUnified) {
