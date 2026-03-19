@@ -122,6 +122,36 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
 
   const [isUnified, setIsUnified] = useState(true)
 
+  // Fetch activeFacilities + searchMedication/Continuous/Intermittent for a result set.
+  // Groups by (region, env) and fires one parallel inventory request per domain,
+  // then merges the details back into the results state.
+  const loadDetails = async (items: SearchResult[]) => {
+    if (items.length === 0) return
+    const domainGroups = new Map<string, { groupIds: string[]; region: string; environment: string }>()
+    for (const r of items) {
+      const key = `${r.region}|${r.environment}`
+      if (!domainGroups.has(key)) domainGroups.set(key, { groupIds: [], region: r.region, environment: r.environment })
+      domainGroups.get(key)!.groupIds.push(r.groupId)
+    }
+    const fetches = [...domainGroups.values()].map(async ({ groupIds, region, environment }) => {
+      const params = new URLSearchParams({ groupIds: groupIds.join(','), region, environment })
+      const res = await fetch(`/api/formulary/inventory?${params}`)
+      const data = await res.json() as Record<string, { activeFacilities: string[]; searchMedication: boolean; searchContinuous: boolean; searchIntermittent: boolean }>
+      return { data, region, environment }
+    })
+    const detailResults = await Promise.all(fetches)
+    const detailMap = new Map<string, typeof detailResults[0]['data'][string]>()
+    for (const { data, region, environment } of detailResults) {
+      for (const [groupId, detail] of Object.entries(data)) {
+        detailMap.set(`${groupId}|${region}|${environment}`, detail)
+      }
+    }
+    setResults(prev => prev.map(r => {
+      const detail = detailMap.get(`${r.groupId}|${r.region}|${r.environment}`)
+      return detail ? { ...r, ...detail } : r
+    }))
+  }
+
   // Per-field query status (parallel mode only)
   type FieldStatus = { state: 'loading' | 'done'; count: number; ms: number; limit: number }
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({})
@@ -459,6 +489,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         setResults(cached.results)
         setTotal(cached.total)
         setFromCachedAt(cached.cachedAt)
+        loadDetails(cached.results)
       } else if (useParallel) {
         // ── Parallel path: one fetch per field, results trickle in as each resolves ──
         if (fieldsToQuery.size === 0) {
@@ -508,6 +539,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         const entry = { results: finalResults, total: finalTotal, cachedAt: Date.now() }
         searchCache.current.set(cacheKey, entry)
         try { localStorage.setItem(LS_CACHE_PREFIX + cacheKey, JSON.stringify(entry)) } catch { /* quota */ }
+        loadDetails(finalResults)
         } // end else (fieldsToQuery.size > 0)
       } else {
         // ── Single-query path: NDJSON stream (wildcard / facility filter) ─────
@@ -537,6 +569,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         setResults(finalResults)
         setTotal(finalTotal)
         setQueryMs(elapsed)
+        loadDetails(finalResults)
       }
     } finally {
       clearTimeout(showAfter)

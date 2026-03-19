@@ -146,13 +146,15 @@ export async function searchFormulary({
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
-  // Fast path: no facility filter — batch COUNT + SELECT in one round-trip
+  // Fast path: no facility filter — batch COUNT + SELECT in one round-trip.
+  // JSON blobs (oe_defaults_json, inventory_json) are omitted here; the client
+  // fetches them via /api/formulary/inventory after displaying initial results.
   if (!facilities) {
     const [{ rows: countRows }, { rows }] = await db.batch([
       { sql: `SELECT COUNT(*) AS cnt FROM formulary_groups ${where}`, args: sqlArgs },
       { sql: `SELECT group_id, description, generic_name, strength, strength_unit,
                      dosage_form, mnemonic, status, charge_number, brand_name,
-                     formulary_status, pyxis_id, oe_defaults_json, inventory_json, region, environment
+                     formulary_status, pyxis_id, region, environment
               FROM formulary_groups ${where} LIMIT ?`,
         args: [...sqlArgs, AUTO_FETCH_MAX] },
     ], 'read')
@@ -163,11 +165,13 @@ export async function searchFormulary({
     return { results, total: count }
   }
 
-  // Slow path: facility filter active → fetch all rows, parse inventory_json, filter in JS
+  // Slow path: facility filter active → fetch all rows, parse inventory_json, filter in JS.
+  // inventory_json is needed here for filtering; activeFacilities is populated from it
+  // so the facility column shows immediately (no secondary fetch needed for this path).
   const sql = `
     SELECT group_id, description, generic_name, strength, strength_unit,
            dosage_form, mnemonic, status, charge_number, brand_name,
-           formulary_status, pyxis_id, oe_defaults_json, inventory_json, region, environment
+           formulary_status, pyxis_id, inventory_json, region, environment
     FROM formulary_groups
     ${where}
   `
@@ -180,7 +184,8 @@ export async function searchFormulary({
       allFacilities: boolean
       facilities: Record<string, boolean>
     }
-    return { ...mapRow(row), _allFacilities: inv.allFacilities }
+    const activeFacilities = Object.keys(inv.facilities ?? {}).filter(k => inv.facilities[k])
+    return { ...mapRow(row), activeFacilities, _allFacilities: inv.allFacilities ?? false }
   })
 
   const facs = facilities
@@ -201,16 +206,10 @@ export async function searchFormulary({
   return { results, total }
 }
 
-// Shared row-mapping helper used by both searchFormulary and searchByField
+// Shared row-mapping helper — returns scalar fields only.
+// activeFacilities and search flags are empty/false; the client fills them
+// in via a secondary /api/formulary/inventory call.
 function mapRow(row: Row): SearchResult {
-  const oe = JSON.parse((row.oe_defaults_json as string) || '{}') as {
-    searchMedication?: boolean; searchContinuous?: boolean; searchIntermittent?: boolean
-  }
-  const inv = JSON.parse((row.inventory_json as string) || '{}') as {
-    allFacilities: boolean
-    facilities: Record<string, boolean>
-  }
-  const activeFacilities = Object.keys(inv.facilities ?? {}).filter(k => inv.facilities[k])
   return {
     groupId: row.group_id as string,
     description: row.description as string,
@@ -224,12 +223,12 @@ function mapRow(row: Row): SearchResult {
     brandName: row.brand_name as string,
     formularyStatus: row.formulary_status as string,
     pyxisId: row.pyxis_id as string,
-    activeFacilities,
     region: row.region as string,
     environment: row.environment as string,
-    searchMedication: oe.searchMedication ?? false,
-    searchContinuous: oe.searchContinuous ?? false,
-    searchIntermittent: oe.searchIntermittent ?? false,
+    activeFacilities: [],
+    searchMedication: false,
+    searchContinuous: false,
+    searchIntermittent: false,
   }
 }
 
@@ -258,7 +257,7 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
       sql: `SELECT DISTINCT fg.group_id, fg.description, fg.generic_name, fg.strength,
                    fg.strength_unit, fg.dosage_form, fg.mnemonic, fg.status,
                    fg.charge_number, fg.brand_name, fg.formulary_status,
-                   fg.pyxis_id, fg.oe_defaults_json, fg.inventory_json, fg.region, fg.environment
+                   fg.pyxis_id, fg.region, fg.environment
             FROM supply_records sr
             JOIN formulary_groups fg ON fg.group_id = sr.group_id AND fg.domain = sr.domain
             WHERE ${ndcConditions.join(' AND ')}
@@ -285,7 +284,7 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
   const { rows } = await client.execute({
     sql: `SELECT group_id, description, generic_name, strength, strength_unit,
                  dosage_form, mnemonic, status, charge_number, brand_name,
-                 formulary_status, pyxis_id, oe_defaults_json, inventory_json, region, environment
+                 formulary_status, pyxis_id, region, environment
           FROM formulary_groups ${where} LIMIT ?`,
     args: [...sqlArgs, params.limit],
   })
@@ -338,7 +337,7 @@ export async function searchByFields(
       parts.push(
         `SELECT * FROM (SELECT '${field}' AS _field, group_id, description, generic_name, strength, ` +
         `strength_unit, dosage_form, mnemonic, status, charge_number, brand_name, ` +
-        `formulary_status, pyxis_id, oe_defaults_json, inventory_json, region, environment ` +
+        `formulary_status, pyxis_id, region, environment ` +
         `FROM formulary_groups ${where} LIMIT ${limit})`
       )
       args.push(...fieldArgs)
@@ -363,7 +362,7 @@ export async function searchByFields(
       sql: `SELECT DISTINCT fg.group_id, fg.description, fg.generic_name, fg.strength,
                    fg.strength_unit, fg.dosage_form, fg.mnemonic, fg.status,
                    fg.charge_number, fg.brand_name, fg.formulary_status,
-                   fg.pyxis_id, fg.oe_defaults_json, fg.inventory_json, fg.region, fg.environment
+                   fg.pyxis_id, fg.region, fg.environment
             FROM supply_records sr
             JOIN formulary_groups fg ON fg.group_id = sr.group_id AND fg.domain = sr.domain
             WHERE ${ndcConds.join(' AND ')}
