@@ -179,7 +179,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   const [queryMs, setQueryMs] = useState<number | null>(null)
   const [elapsedSec, setElapsedSec] = useState<number | null>(null)
   const searchStartRef = useRef<number | null>(null)
-  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
 
   // Columns: unified label + width, order is mutable
   const [cols, setCols] = useState([
@@ -458,9 +458,10 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     setFieldStatus({})
     const t0 = performance.now()
     searchStartRef.current = t0
+    let elapsedTimer: ReturnType<typeof setInterval> | null = null
     const showAfter = setTimeout(() => {
       setElapsedSec(1)
-      elapsedTimerRef.current = setInterval(() => {
+      elapsedTimer = setInterval(() => {
         setElapsedSec(Math.floor((performance.now() - t0) / 1000))
       }, 1000)
     }, 1000)
@@ -583,7 +584,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       }
     } finally {
       clearTimeout(showAfter)
-      if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null }
+      if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
       setElapsedSec(null)
       setPendingTotal(null)
       setIsLoading(false)
@@ -1084,9 +1085,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                         </>
                       )}
                     </span>
-                    {detailsLoading ? (
-                      <span className="text-[10px] text-[#808080] animate-pulse font-mono">loading details…</span>
-                    ) : isExpanding ? (
+                    {isExpanding ? (
                       <div className="flex items-center gap-1.5">
                         <div className="w-16 h-2 border border-[#808080] bg-[#D4D0C8] overflow-hidden relative">
                           <div className="absolute top-0 bottom-0 w-5 bg-[#316AC5] animate-[marquee_1.4s_linear_infinite]" />
@@ -1094,13 +1093,21 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                         <span>Finding more…</span>
                       </div>
                     ) : fromCachedAt !== null ? (
-                      <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0] text-[#808080]" title={`Cached at ${new Date(fromCachedAt).toLocaleTimeString()}`}>
-                        {(() => { const age = Date.now() - fromCachedAt; return age < 60_000 ? 'cached <1m ago' : age < 3_600_000 ? `cached ${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `cached ${Math.round(age / 3_600_000)}h ago` : `cached ${Math.round(age / 86_400_000)}d ago` })()}
-                      </span>
+                      <>
+                        <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0] text-[#808080]" title={`Cached at ${new Date(fromCachedAt).toLocaleTimeString()}`}>
+                          {(() => { const age = Date.now() - fromCachedAt; return age < 60_000 ? 'cached <1m ago' : age < 3_600_000 ? `cached ${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `cached ${Math.round(age / 3_600_000)}h ago` : `cached ${Math.round(age / 86_400_000)}d ago` })()}
+                        </span>
+                        {detailsLoading && <span className="text-[10px] text-[#808080] animate-pulse font-mono">loading details…</span>}
+                      </>
                     ) : queryMs !== null ? (
-                      <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0]">
-                        {queryMs >= 1000 ? `${(queryMs / 1000).toFixed(1)}s` : `${queryMs}ms`}
-                      </span>
+                      <>
+                        <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0]">
+                          {queryMs >= 1000 ? `${(queryMs / 1000).toFixed(1)}s` : `${queryMs}ms`}
+                        </span>
+                        {detailsLoading && <span className="text-[10px] text-[#808080] animate-pulse font-mono">loading details…</span>}
+                      </>
+                    ) : detailsLoading ? (
+                      <span className="text-[10px] text-[#808080] animate-pulse font-mono">loading details…</span>
                     ) : null}
                   </>
                 )}
