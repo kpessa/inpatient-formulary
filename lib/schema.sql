@@ -29,15 +29,47 @@ CREATE TABLE IF NOT EXISTS formulary_groups (
 CREATE INDEX IF NOT EXISTS idx_fg_domain     ON formulary_groups(domain);
 CREATE INDEX IF NOT EXISTS idx_fg_group_id   ON formulary_groups(group_id);
 CREATE INDEX IF NOT EXISTS idx_fg_region_env ON formulary_groups(region, environment);
-CREATE INDEX IF NOT EXISTS idx_fg_status        ON formulary_groups(status);
-CREATE INDEX IF NOT EXISTS idx_fg_description   ON formulary_groups(description);
-CREATE INDEX IF NOT EXISTS idx_fg_generic_name  ON formulary_groups(generic_name);
-CREATE INDEX IF NOT EXISTS idx_fg_mnemonic      ON formulary_groups(mnemonic);
-CREATE INDEX IF NOT EXISTS idx_fg_charge_number ON formulary_groups(charge_number);
-CREATE INDEX IF NOT EXISTS idx_fg_pyxis_id      ON formulary_groups(pyxis_id);
-CREATE INDEX IF NOT EXISTS idx_fg_brand_name    ON formulary_groups(brand_name);
-CREATE INDEX IF NOT EXISTS idx_fg_brand_name2   ON formulary_groups(brand_name2);
-CREATE INDEX IF NOT EXISTS idx_fg_brand_name3   ON formulary_groups(brand_name3);
+
+-- Covering indexes for the fast scalar search path.
+-- Each index uses LOWER(column) as the leading key so SQLite can do a case-insensitive
+-- B-tree range scan (WHERE LOWER(col) >= ? AND LOWER(col) < ?) without touching the
+-- main table rows (which contain large JSON blobs).
+-- Critical for Turso (remote SQLite): reduces ~17 table-page fetches per query
+-- (~200ms each) to ~1-2 compact index-page fetches.
+-- The original column is stored as the second key so the original-case value is
+-- available for SELECT without a table lookup (fully covering).
+CREATE INDEX IF NOT EXISTS idx_fg_cov_description ON formulary_groups(
+  LOWER(description), description, group_id, generic_name, strength, strength_unit, dosage_form,
+  mnemonic, status, charge_number, brand_name, formulary_status, pyxis_id, region, environment
+);
+CREATE INDEX IF NOT EXISTS idx_fg_cov_generic_name ON formulary_groups(
+  LOWER(generic_name), generic_name, group_id, description, strength, strength_unit, dosage_form,
+  mnemonic, status, charge_number, brand_name, formulary_status, pyxis_id, region, environment
+);
+CREATE INDEX IF NOT EXISTS idx_fg_cov_mnemonic ON formulary_groups(
+  LOWER(mnemonic), mnemonic, group_id, description, generic_name, strength, strength_unit, dosage_form,
+  status, charge_number, brand_name, formulary_status, pyxis_id, region, environment
+);
+CREATE INDEX IF NOT EXISTS idx_fg_cov_charge_number ON formulary_groups(
+  charge_number, group_id, description, generic_name, strength, strength_unit, dosage_form,
+  mnemonic, status, brand_name, formulary_status, pyxis_id, region, environment
+);
+CREATE INDEX IF NOT EXISTS idx_fg_cov_pyxis_id ON formulary_groups(
+  pyxis_id, group_id, description, generic_name, strength, strength_unit, dosage_form,
+  mnemonic, status, charge_number, brand_name, formulary_status, region, environment
+);
+CREATE INDEX IF NOT EXISTS idx_fg_cov_brand_name ON formulary_groups(
+  LOWER(brand_name), brand_name, group_id, description, generic_name, strength, strength_unit, dosage_form,
+  mnemonic, status, charge_number, formulary_status, pyxis_id, region, environment
+);
+CREATE INDEX IF NOT EXISTS idx_fg_cov_brand_name2 ON formulary_groups(
+  LOWER(brand_name2), brand_name2, group_id, description, generic_name, strength, strength_unit, dosage_form,
+  mnemonic, status, charge_number, brand_name, formulary_status, pyxis_id, region, environment
+);
+CREATE INDEX IF NOT EXISTS idx_fg_cov_brand_name3 ON formulary_groups(
+  LOWER(brand_name3), brand_name3, group_id, description, generic_name, strength, strength_unit, dosage_form,
+  mnemonic, status, charge_number, brand_name, brand_name2, formulary_status, pyxis_id, region, environment
+);
 
 CREATE TABLE IF NOT EXISTS supply_records (
   id                      INTEGER PRIMARY KEY,

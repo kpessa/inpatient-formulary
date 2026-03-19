@@ -1309,7 +1309,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                           </div>
                                           <div className="hidden group-hover:block absolute left-full top-2 ml-1 bg-[#FFFFE1] border border-black p-1 shadow z-[9999] min-w-[140px] text-black text-xs whitespace-nowrap">
                                             <div className="font-bold mb-0.5 border-b border-[#C0C0C0] pb-0.5">{facCount} facilities</div>
-                                            {realFacs.map(f => <div key={f}>{f}</div>)}
+                                            {[...realFacs].sort().map(f => <div key={f}>{f}</div>)}
                                           </div>
                                         </>
                                       )}

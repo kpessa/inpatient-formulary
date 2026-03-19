@@ -247,8 +247,10 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
   const sqlArgs: (string | number)[] = []
 
   if (params.field === 'ndc') {
-    const ndcConditions: string[] = [`sr.ndc LIKE ?`]
-    const ndcArgs: (string | number)[] = [`${params.q}%`]
+    const ndcLo = params.q
+    const ndcHi = nextPrefix(params.q)
+    const ndcConditions: string[] = ['sr.ndc >= ? AND sr.ndc < ? AND sr.ndc LIKE ?']
+    const ndcArgs: (string | number)[] = [ndcLo, ndcHi, `${params.q}%`]
     // status filter omitted — client filters via showInactive; avoids blocking idx_sr_ndc
     if (params.region)      { ndcConditions.push('fg.region = ?');      ndcArgs.push(params.region) }
     if (params.environment) { ndcConditions.push('fg.environment = ?'); ndcArgs.push(params.environment) }
@@ -271,13 +273,23 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
   if (params.region)      { conditions.push('region = ?');      sqlArgs.push(params.region) }
   if (params.environment) { conditions.push('environment = ?'); sqlArgs.push(params.environment) }
 
+  const lo = params.q
+  const hi = nextPrefix(params.q)
+  const likeQ = `${params.q}%`
+  const needsLower = params.field !== 'charge_number' && params.field !== 'pyxis_id'
   if (params.field === 'brand_name') {
-    conditions.push('(brand_name LIKE ? OR brand_name2 LIKE ? OR brand_name3 LIKE ?)')
-    const prefix = `${params.q}%`
-    sqlArgs.push(prefix, prefix, prefix)
+    conditions.push(
+      '((LOWER(brand_name) >= ? AND LOWER(brand_name) < ? AND brand_name LIKE ?)' +
+      ' OR (LOWER(brand_name2) >= ? AND LOWER(brand_name2) < ? AND brand_name2 LIKE ?)' +
+      ' OR (LOWER(brand_name3) >= ? AND LOWER(brand_name3) < ? AND brand_name3 LIKE ?))'
+    )
+    sqlArgs.push(lo, hi, likeQ, lo, hi, likeQ, lo, hi, likeQ)
+  } else if (needsLower) {
+    conditions.push(`LOWER(${params.field}) >= ? AND LOWER(${params.field}) < ? AND ${params.field} LIKE ?`)
+    sqlArgs.push(lo, hi, likeQ)
   } else {
-    conditions.push(`${params.field} LIKE ?`)
-    sqlArgs.push(`${params.q}%`)
+    conditions.push(`${params.field} >= ? AND ${params.field} < ? AND ${params.field} LIKE ?`)
+    sqlArgs.push(lo, hi, likeQ)
   }
 
   const where = `WHERE ${conditions.join(' AND ')}`
@@ -289,6 +301,21 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
     args: [...sqlArgs, params.limit],
   })
   return rows.map(mapRow)
+}
+
+// Returns the smallest string that is greater than every string with the given prefix.
+// E.g. nextPrefix('abc') = 'abd'. Enables B-tree range scans alongside LIKE queries:
+//   field >= q AND field < nextPrefix(q) AND field LIKE q%
+// The range conditions let SQLite do a covering-index range scan; LIKE handles case filtering.
+function nextPrefix(q: string): string {
+  for (let i = q.length - 1; i >= 0; i--) {
+    const code = q.charCodeAt(i)
+    if (code < 0xffff) {
+      return q.slice(0, i) + String.fromCharCode(code + 1)
+    }
+  }
+  // All chars are 0xffff — return a string guaranteed to sort after any q-prefixed string
+  return q + '\uffff'
 }
 
 // Multi-field search: runs all simple fields as a single UNION ALL (one Turso round-trip),
@@ -323,13 +350,27 @@ export async function searchByFields(
       if (region)      { conds.push('region = ?');      fieldArgs.push(region) }
       if (environment) { conds.push('environment = ?'); fieldArgs.push(environment) }
 
+      // Use LOWER(field) range bounds to force a case-insensitive B-tree range scan on the
+      // LOWER(col) covering index. Without this, SQLite's case-insensitive LIKE prevents the
+      // range optimization, falling back to a full index scan (~10s on Turso vs ~100ms).
+      // charge_number and pyxis_id are alphanumeric — no LOWER() needed; use plain range.
+      const lo = q   // already lowercased by the route handler
+      const hi = nextPrefix(q)
+      const likeQ = `${q}%`
+      const needsLower = field !== 'charge_number' && field !== 'pyxis_id'
       if (field === 'brand_name') {
-        conds.push('(brand_name LIKE ? OR brand_name2 LIKE ? OR brand_name3 LIKE ?)')
-        const prefix = `${q}%`
-        fieldArgs.push(prefix, prefix, prefix)
+        conds.push(
+          '((LOWER(brand_name) >= ? AND LOWER(brand_name) < ? AND brand_name LIKE ?)' +
+          ' OR (LOWER(brand_name2) >= ? AND LOWER(brand_name2) < ? AND brand_name2 LIKE ?)' +
+          ' OR (LOWER(brand_name3) >= ? AND LOWER(brand_name3) < ? AND brand_name3 LIKE ?))'
+        )
+        fieldArgs.push(lo, hi, likeQ, lo, hi, likeQ, lo, hi, likeQ)
+      } else if (needsLower) {
+        conds.push(`LOWER(${field}) >= ? AND LOWER(${field}) < ? AND ${field} LIKE ?`)
+        fieldArgs.push(lo, hi, likeQ)
       } else {
-        conds.push(`${field} LIKE ?`)
-        fieldArgs.push(`${q}%`)
+        conds.push(`${field} >= ? AND ${field} < ? AND ${field} LIKE ?`)
+        fieldArgs.push(lo, hi, likeQ)
       }
 
       const where = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : ''
@@ -352,8 +393,10 @@ export async function searchByFields(
   }
 
   if (hasNdc) {
-    const ndcConds: string[] = ['sr.ndc LIKE ?']
-    const ndcArgs: (string | number)[] = [`${q}%`]
+    const ndcLo = q
+    const ndcHi = nextPrefix(q)
+    const ndcConds: string[] = ['sr.ndc >= ? AND sr.ndc < ? AND sr.ndc LIKE ?']
+    const ndcArgs: (string | number)[] = [ndcLo, ndcHi, `${q}%`]
     // status filter omitted — client filters via showInactive; avoids blocking idx_sr_ndc
     if (region)      { ndcConds.push('fg.region = ?');      ndcArgs.push(region) }
     if (environment) { ndcConds.push('fg.environment = ?'); ndcArgs.push(environment) }
