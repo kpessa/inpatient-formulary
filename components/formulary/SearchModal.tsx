@@ -122,34 +122,44 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
 
   const [isUnified, setIsUnified] = useState(true)
 
+  const [detailsLoading, setDetailsLoading] = useState(false)
+
   // Fetch activeFacilities + searchMedication/Continuous/Intermittent for a result set.
   // Groups by (region, env) and fires one parallel inventory request per domain,
   // then merges the details back into the results state.
   const loadDetails = async (items: SearchResult[]) => {
     if (items.length === 0) return
-    const domainGroups = new Map<string, { groupIds: string[]; region: string; environment: string }>()
-    for (const r of items) {
-      const key = `${r.region}|${r.environment}`
-      if (!domainGroups.has(key)) domainGroups.set(key, { groupIds: [], region: r.region, environment: r.environment })
-      domainGroups.get(key)!.groupIds.push(r.groupId)
-    }
-    const fetches = [...domainGroups.values()].map(async ({ groupIds, region, environment }) => {
-      const params = new URLSearchParams({ groupIds: groupIds.join(','), region, environment })
-      const res = await fetch(`/api/formulary/inventory?${params}`)
-      const data = await res.json() as Record<string, { activeFacilities: string[]; searchMedication: boolean; searchContinuous: boolean; searchIntermittent: boolean }>
-      return { data, region, environment }
-    })
-    const detailResults = await Promise.all(fetches)
-    const detailMap = new Map<string, typeof detailResults[0]['data'][string]>()
-    for (const { data, region, environment } of detailResults) {
-      for (const [groupId, detail] of Object.entries(data)) {
-        detailMap.set(`${groupId}|${region}|${environment}`, detail)
+    setDetailsLoading(true)
+    try {
+      const domainGroups = new Map<string, { groupIds: string[]; region: string; environment: string }>()
+      for (const r of items) {
+        const key = `${r.region}|${r.environment}`
+        if (!domainGroups.has(key)) domainGroups.set(key, { groupIds: [], region: r.region, environment: r.environment })
+        domainGroups.get(key)!.groupIds.push(r.groupId)
       }
+      const fetches = [...domainGroups.values()].map(async ({ groupIds, region, environment }) => {
+        const params = new URLSearchParams({ groupIds: groupIds.join(','), region, environment })
+        const res = await fetch(`/api/formulary/inventory?${params}`)
+        if (!res.ok) throw new Error(`inventory ${res.status}`)
+        const data = await res.json() as Record<string, { activeFacilities: string[]; searchMedication: boolean; searchContinuous: boolean; searchIntermittent: boolean }>
+        return { data, region, environment }
+      })
+      const detailResults = await Promise.all(fetches)
+      const detailMap = new Map<string, typeof detailResults[0]['data'][string]>()
+      for (const { data, region, environment } of detailResults) {
+        for (const [groupId, detail] of Object.entries(data)) {
+          detailMap.set(`${groupId}|${region}|${environment}`, detail)
+        }
+      }
+      setResults(prev => prev.map(r => {
+        const detail = detailMap.get(`${r.groupId}|${r.region}|${r.environment}`)
+        return detail ? { ...r, ...detail } : r
+      }))
+    } catch (err) {
+      console.error('loadDetails failed:', err)
+    } finally {
+      setDetailsLoading(false)
     }
-    setResults(prev => prev.map(r => {
-      const detail = detailMap.get(`${r.groupId}|${r.region}|${r.environment}`)
-      return detail ? { ...r, ...detail } : r
-    }))
   }
 
   // Per-field query status (parallel mode only)
@@ -1074,7 +1084,9 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                         </>
                       )}
                     </span>
-                    {isExpanding ? (
+                    {detailsLoading ? (
+                      <span className="text-[10px] text-[#808080] animate-pulse font-mono">loading details…</span>
+                    ) : isExpanding ? (
                       <div className="flex items-center gap-1.5">
                         <div className="w-16 h-2 border border-[#808080] bg-[#D4D0C8] overflow-hidden relative">
                           <div className="absolute top-0 bottom-0 w-5 bg-[#316AC5] animate-[marquee_1.4s_linear_infinite]" />
@@ -1240,7 +1252,11 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                   const mic = [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].join('')
                                   return (
                                     <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden">
-                                      {mic && <span className={`text-[10px] px-1 font-mono rounded ${isSelected ? "bg-white/20" : "bg-[#E8E8E0] text-[#444]"}`}>{mic}</span>}
+                                      {mic
+                                        ? <span className={`text-[10px] px-1 font-mono rounded ${isSelected ? "bg-white/20" : "bg-[#E8E8E0] text-[#444]"}`}>{mic}</span>
+                                        : detailsLoading
+                                        ? <span className={`text-[10px] font-mono animate-pulse ${isSelected ? "text-white/40" : "text-[#B0B0B0]"}`}>···</span>
+                                        : null}
                                     </td>
                                   )
                                 }
@@ -1249,6 +1265,8 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                     <td key={col.id} className="px-2 py-0.5 max-w-0 relative group">
                                       {facilitiesLoading && facCount === 0 && r.activeFacilities.length === 0 ? (
                                         <span className="text-[#A0A0A0] italic">loading…</span>
+                                      ) : detailsLoading && facCount === 0 && r.activeFacilities.length === 0 ? (
+                                        <span className={`text-[10px] animate-pulse ${isSelected ? "text-white/40" : "text-[#B0B0B0]"}`}>···</span>
                                       ) : facCount === 0 && r.activeFacilities.length === 0 ? null : facCount === 0 ? (
                                         <span className={`text-[10px] italic ${isSelected ? "text-white/50" : "text-[#B0B0B0]"}`}>corp only</span>
                                       ) : facCount === 1 ? (
