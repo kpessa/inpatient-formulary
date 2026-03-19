@@ -36,6 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_fg_mnemonic      ON formulary_groups(mnemonic);
 CREATE INDEX IF NOT EXISTS idx_fg_charge_number ON formulary_groups(charge_number);
 CREATE INDEX IF NOT EXISTS idx_fg_pyxis_id      ON formulary_groups(pyxis_id);
 CREATE INDEX IF NOT EXISTS idx_fg_brand_name    ON formulary_groups(brand_name);
+CREATE INDEX IF NOT EXISTS idx_fg_brand_name2   ON formulary_groups(brand_name2);
+CREATE INDEX IF NOT EXISTS idx_fg_brand_name3   ON formulary_groups(brand_name3);
 
 CREATE TABLE IF NOT EXISTS supply_records (
   id                      INTEGER PRIMARY KEY,

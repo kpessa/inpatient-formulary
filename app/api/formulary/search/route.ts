@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { searchFormulary, searchByField } from "@/lib/db"
+import { searchFormulary, searchByField, searchByFields } from "@/lib/db"
 import type { SearchResult, FieldSearchParams } from "@/lib/db"
 
 export type { SearchResult }
@@ -27,24 +27,17 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder()
 
-  // Field path: parallel queries on the server, one NDJSON line per field streamed back.
-  // All fields run concurrently in one function invocation — avoids per-field cold starts.
+  // Field path: single UNION ALL query (+ separate NDC JOIN if needed) — one Turso round-trip.
+  // The libsql singleton serializes concurrent execute() calls, so Promise.all over multiple
+  // searchByField() calls would be sequential. UNION ALL avoids that penalty entirely.
   if (fields && fields.length > 0 && q && !facilitiesParam) {
-    const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          await Promise.all(fields.map(async (field) => {
-            const t = performance.now()
-            const results = await searchByField({ field, q, region, environment, showInactive, limit })
-            const ms = Math.round(performance.now() - t)
-            controller.enqueue(encoder.encode(JSON.stringify({ field, results, ms, rawCount: results.length }) + '\n'))
-          }))
-        } finally {
-          controller.close()
-        }
-      },
-    })
-    return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } })
+    const t = performance.now()
+    const fieldResults = await searchByFields(fields, q, region, environment, showInactive, limit)
+    const ms = Math.round(performance.now() - t)
+    const body = Object.entries(fieldResults)
+      .map(([field, results]) => JSON.stringify({ field, results, ms, rawCount: results.length }))
+      .join('\n') + '\n'
+    return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })
   }
 
   // Single-query path: facility filter, wildcard, or no fields specified
