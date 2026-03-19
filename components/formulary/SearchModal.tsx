@@ -513,27 +513,35 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
           [f, { state: 'loading' as const, count: 0, ms: 0, limit: maxResults }]
         )))
 
+        // One request with all fields — server parallelizes internally and streams
+        // NDJSON back (one line per field), avoiding per-field cold starts.
         const fieldResults: Record<string, SearchResult[]> = {}
-        const fieldFetches = [...fieldsToQuery].map(field => {
-          const fp = new URLSearchParams([...baseParams.entries(), ['fields', field]])
-          return fetch(`/api/formulary/search?${fp}`)
-            .then(r => r.text())
-            .then(text => {
-              const chunk = JSON.parse(text.trim()) as { field: string; results: SearchResult[]; ms: number; rawCount: number }
-              fieldResults[chunk.field] = chunk.results
-              setResults(prev => {
-                const existingIds = new Set(prev.map(r => `${r.groupId}|${r.region}|${r.environment}`))
-                const fresh = chunk.results.filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
-                return [...prev, ...fresh]
-              })
-              setFieldStatus(prev => ({
-                ...prev,
-                [chunk.field]: { state: 'done', count: chunk.rawCount, ms: chunk.ms, limit: maxResults },
-              }))
+        const fp = new URLSearchParams([...baseParams.entries(), ['fields', [...fieldsToQuery].join(',')]])
+        const fieldRes = await fetch(`/api/formulary/search?${fp}`)
+        const fieldReader = fieldRes.body!.getReader()
+        const fieldDecoder = new TextDecoder()
+        let fieldBuf = ''
+        while (true) {
+          const { done, value } = await fieldReader.read()
+          if (value) fieldBuf += fieldDecoder.decode(value, { stream: !done })
+          const lines = fieldBuf.split('\n')
+          fieldBuf = lines.pop()!
+          for (const line of lines) {
+            if (!line.trim()) continue
+            const chunk = JSON.parse(line) as { field: string; results: SearchResult[]; ms: number; rawCount: number }
+            fieldResults[chunk.field] = chunk.results
+            setResults(prev => {
+              const existingIds = new Set(prev.map(r => `${r.groupId}|${r.region}|${r.environment}`))
+              const fresh = chunk.results.filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
+              return [...prev, ...fresh]
             })
-        })
-
-        await Promise.all(fieldFetches)
+            setFieldStatus(prev => ({
+              ...prev,
+              [chunk.field]: { state: 'done', count: chunk.rawCount, ms: chunk.ms, limit: maxResults },
+            }))
+          }
+          if (done) break
+        }
 
         // Deduplicate merged results for cache
         const seen = new Set<string>()

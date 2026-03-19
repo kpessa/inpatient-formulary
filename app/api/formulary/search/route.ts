@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { searchFormulary, searchByField, searchByFields } from "@/lib/db"
+import { searchFormulary, searchByField } from "@/lib/db"
 import type { SearchResult, FieldSearchParams } from "@/lib/db"
 
 export type { SearchResult }
@@ -27,25 +27,24 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder()
 
-  // Single-field path: one indexed prefix scan per request (parallel fetches from client)
-  if (fields && fields.length === 1 && q && !facilitiesParam) {
-    const field = fields[0]
-    const t = performance.now()
-    const results = await searchByField({ field, q, region, environment, showInactive, limit })
-    const ms = Math.round(performance.now() - t)
-    const body = JSON.stringify({ field, results, ms, rawCount: results.length }) + '\n'
-    return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })
-  }
-
-  // Multi-field path: UNION ALL (kept for direct API callers with multiple fields)
-  if (fields && fields.length > 1 && q && !facilitiesParam) {
-    const t = performance.now()
-    const fieldResults = await searchByFields(fields, q, region, environment, showInactive, limit)
-    const ms = Math.round(performance.now() - t)
-    const body = Object.entries(fieldResults)
-      .map(([field, results]) => JSON.stringify({ field, results, ms, rawCount: results.length }))
-      .join('\n') + '\n'
-    return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })
+  // Field path: parallel queries on the server, one NDJSON line per field streamed back.
+  // All fields run concurrently in one function invocation — avoids per-field cold starts.
+  if (fields && fields.length > 0 && q && !facilitiesParam) {
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          await Promise.all(fields.map(async (field) => {
+            const t = performance.now()
+            const results = await searchByField({ field, q, region, environment, showInactive, limit })
+            const ms = Math.round(performance.now() - t)
+            controller.enqueue(encoder.encode(JSON.stringify({ field, results, ms, rawCount: results.length }) + '\n'))
+          }))
+        } finally {
+          controller.close()
+        }
+      },
+    })
+    return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } })
   }
 
   // Single-query path: facility filter, wildcard, or no fields specified
