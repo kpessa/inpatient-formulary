@@ -124,13 +124,15 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
 
   const [detailsLoading, setDetailsLoading] = useState(false)
 
-  // Fetch activeFacilities + searchMedication/Continuous/Intermittent for a result set.
-  // Groups by (region, env) and fires one parallel inventory request per domain,
-  // then merges the details back into the results state.
-  const loadDetails = async (items: SearchResult[]) => {
+  // Phase 2: fetch activeFacilities + searchMedication/Continuous/Intermittent.
+  // Called via setTimeout after the fast results render so the UI updates in two
+  // distinct phases. The gen parameter guards against stale calls from prior searches.
+  const loadDetails = async (items: SearchResult[], gen: number) => {
     if (items.length === 0) return
+    if (searchGenRef.current !== gen) return   // new search started — bail
     setDetailsLoading(true)
     try {
+      // Group by (region, environment) — one inventory request per domain
       const domainGroups = new Map<string, { groupIds: string[]; region: string; environment: string }>()
       for (const r of items) {
         const key = `${r.region}|${r.environment}`
@@ -145,6 +147,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         return { data, region, environment }
       })
       const detailResults = await Promise.all(fetches)
+      if (searchGenRef.current !== gen) return  // new search started while fetching — bail
       const detailMap = new Map<string, typeof detailResults[0]['data'][string]>()
       for (const { data, region, environment } of detailResults) {
         for (const [groupId, detail] of Object.entries(data)) {
@@ -158,7 +161,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     } catch (err) {
       console.error('loadDetails failed:', err)
     } finally {
-      setDetailsLoading(false)
+      if (searchGenRef.current === gen) setDetailsLoading(false)
     }
   }
 
@@ -179,6 +182,9 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   const [queryMs, setQueryMs] = useState<number | null>(null)
   const [elapsedSec, setElapsedSec] = useState<number | null>(null)
   const searchStartRef = useRef<number | null>(null)
+  // Incremented on each new search — loadDetails checks this so a stale slow-fetch
+  // from a previous search can't overwrite results from the current one.
+  const searchGenRef = useRef(0)
 
 
   // Columns: unified label + width, order is mutable
@@ -449,6 +455,8 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   }
 
   const handleSearch = async () => {
+    const gen = ++searchGenRef.current  // invalidate any in-flight loadDetails from prior search
+    setDetailsLoading(false)
     setIsLoading(true)
     setSelectedResultIdx(null)
     setQueryMs(null)
@@ -500,7 +508,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         setResults(cached.results)
         setTotal(cached.total)
         setFromCachedAt(cached.cachedAt)
-        loadDetails(cached.results)
+        setTimeout(() => loadDetails(cached.results, gen), 0)
       } else if (useParallel) {
         // ── Parallel path: one fetch per field, results trickle in as each resolves ──
         if (fieldsToQuery.size === 0) {
@@ -558,7 +566,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         const entry = { results: finalResults, total: finalTotal, cachedAt: Date.now() }
         searchCache.current.set(cacheKey, entry)
         try { localStorage.setItem(LS_CACHE_PREFIX + cacheKey, JSON.stringify(entry)) } catch { /* quota */ }
-        loadDetails(finalResults)
+        setTimeout(() => loadDetails(finalResults, gen), 0)
         } // end else (fieldsToQuery.size > 0)
       } else {
         // ── Single-query path: NDJSON stream (wildcard / facility filter) ─────
@@ -588,7 +596,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         setResults(finalResults)
         setTotal(finalTotal)
         setQueryMs(elapsed)
-        loadDetails(finalResults)
+        setTimeout(() => loadDetails(finalResults, gen), 0)
       }
     } finally {
       clearTimeout(showAfter)
