@@ -13,7 +13,7 @@ type Region = "west" | "central" | "east"
 type Env = "build" | "cert" | "mock" | "prod"
 type Status = "idle" | "parsing" | "importing" | "done" | "error"
 
-const BATCH_SIZE = 100
+const BATCH_SIZE = 25
 
 export function ImportModal({ onClose }: ImportModalProps) {
   const [region, setRegion] = useState<Region>("west")
@@ -105,9 +105,9 @@ export function ImportModal({ onClose }: ImportModalProps) {
         })
 
         if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: res.statusText }))
+          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
           setStatus("error")
-          setMessage(`Error on batch ${batchIndex + 1}: ${err.error ?? "Unknown error"}`)
+          setMessage(`Error on batch ${batchIndex + 1}: ${err.error || `HTTP ${res.status}`}`)
           return
         }
 

@@ -29,7 +29,13 @@ CREATE TABLE IF NOT EXISTS formulary_groups (
 CREATE INDEX IF NOT EXISTS idx_fg_domain     ON formulary_groups(domain);
 CREATE INDEX IF NOT EXISTS idx_fg_group_id   ON formulary_groups(group_id);
 CREATE INDEX IF NOT EXISTS idx_fg_region_env ON formulary_groups(region, environment);
-CREATE INDEX IF NOT EXISTS idx_fg_status     ON formulary_groups(status);
+CREATE INDEX IF NOT EXISTS idx_fg_status        ON formulary_groups(status);
+CREATE INDEX IF NOT EXISTS idx_fg_description   ON formulary_groups(description);
+CREATE INDEX IF NOT EXISTS idx_fg_generic_name  ON formulary_groups(generic_name);
+CREATE INDEX IF NOT EXISTS idx_fg_mnemonic      ON formulary_groups(mnemonic);
+CREATE INDEX IF NOT EXISTS idx_fg_charge_number ON formulary_groups(charge_number);
+CREATE INDEX IF NOT EXISTS idx_fg_pyxis_id      ON formulary_groups(pyxis_id);
+CREATE INDEX IF NOT EXISTS idx_fg_brand_name    ON formulary_groups(brand_name);
 
 CREATE TABLE IF NOT EXISTS supply_records (
   id                      INTEGER PRIMARY KEY,
@@ -52,3 +58,4 @@ CREATE TABLE IF NOT EXISTS supply_records (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sr_domain_group ON supply_records(domain, group_id);
+CREATE INDEX IF NOT EXISTS idx_sr_ndc ON supply_records(ndc);

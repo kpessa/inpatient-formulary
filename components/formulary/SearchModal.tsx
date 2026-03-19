@@ -20,6 +20,8 @@ import {
 import type { FormularyItem } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
 
+type UnifiedResult = SearchResult & { _allDomains: string[] }
+
 type Scope =
   | { type: 'all' }
   | { type: 'domain'; region: string; env: string }
@@ -43,10 +45,23 @@ interface SearchModalProps {
   onSelect: (item: FormularyItem) => void
 }
 
-const CACHE_VERSION = 'v1'
+const CACHE_VERSION = 'v2'
 const LS_CACHE_PREFIX = `pharmnet-search-cache:${CACHE_VERSION}:`
 
 const CORP_FACILITIES = new Set(["UHS Corp", "UHST", "UHSB"])
+
+const DOMAIN_PRIORITY: Record<string, number> = {
+  east_prod: 1, west_prod: 2, central_prod: 3,
+  east_cert: 4, west_cert: 5, central_cert: 6,
+  east_mock: 7, west_mock: 8, central_mock: 9,
+  east_build: 10, west_build: 11, central_build: 12,
+}
+function getDomainKey(r: SearchResult): string { return `${r.region}_${r.environment}` }
+function getDomainPriority(r: SearchResult): number { return DOMAIN_PRIORITY[getDomainKey(r)] ?? 99 }
+function getDomainBadge(region: string, env: string): string {
+  const letter = region === 'east' ? 'E' : region === 'west' ? 'W' : 'C'
+  return env === 'prod' ? letter : letter.toLowerCase()
+}
 
 
 const DEFAULT_COLUMNS = [
@@ -104,6 +119,8 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   const [activeFields, setActiveFields] = useState<Set<string>>(
     () => new Set(['description', 'generic_name', 'brand_name', 'mnemonic', 'charge_number', 'pyxis_id', 'ndc'])
   )
+
+  const [isUnified, setIsUnified] = useState(true)
 
   // Per-field query status (parallel mode only)
   type FieldStatus = { state: 'loading' | 'done'; count: number; ms: number; limit: number }
@@ -463,8 +480,8 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
               const chunk = JSON.parse(text.trim()) as { field: string; results: SearchResult[]; ms: number; rawCount: number }
               fieldResults[chunk.field] = chunk.results
               setResults(prev => {
-                const existingIds = new Set(prev.map(r => r.groupId))
-                const fresh = chunk.results.filter(r => !existingIds.has(r.groupId))
+                const existingIds = new Set(prev.map(r => `${r.groupId}|${r.region}|${r.environment}`))
+                const fresh = chunk.results.filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
                 return [...prev, ...fresh]
               })
               setFieldStatus(prev => ({
@@ -479,8 +496,9 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         // Deduplicate merged results for cache
         const seen = new Set<string>()
         const finalResults = Object.values(fieldResults).flat().filter(r => {
-          if (seen.has(r.groupId)) return false
-          seen.add(r.groupId)
+          const key = `${r.groupId}|${r.region}|${r.environment}`
+          if (seen.has(key)) return false
+          seen.add(key)
           return true
         })
         const finalTotal = finalResults.length
@@ -572,8 +590,8 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       }
       const res = await fetch(`/api/formulary/search?${params}`)
       const data = await res.json()
-      const existingIds = new Set(results.map(r => r.groupId))
-      const newOnes = (data.results as SearchResult[]).filter(r => !existingIds.has(r.groupId))
+      const existingIds = new Set(results.map(r => `${r.groupId}|${r.region}|${r.environment}`))
+      const newOnes = (data.results as SearchResult[]).filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
       if (newOnes.length > 0) {
         const merged = [...results, ...newOnes]
         setResults(merged)
@@ -712,14 +730,33 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     )
   }, [results, colFilters])
 
+  const baseResults = useMemo((): UnifiedResult[] => {
+    if (!isUnified) {
+      return filteredResults.map(r => ({ ...r, _allDomains: [getDomainKey(r)] }))
+    }
+    const byGroupId = new Map<string, UnifiedResult>()
+    for (const r of filteredResults) {
+      const existing = byGroupId.get(r.groupId)
+      if (!existing || getDomainPriority(r) < getDomainPriority(existing)) {
+        byGroupId.set(r.groupId, {
+          ...r,
+          _allDomains: existing ? [...existing._allDomains, getDomainKey(r)] : [getDomainKey(r)],
+        })
+      } else {
+        existing._allDomains.push(getDomainKey(r))
+      }
+    }
+    return Array.from(byGroupId.values())
+  }, [filteredResults, isUnified])
+
   const sortedResults = sortState
-    ? [...filteredResults].sort((a, b) => {
+    ? [...baseResults].sort((a, b) => {
         const av = getSortValue(a, sortState.colId).toLowerCase()
         const bv = getSortValue(b, sortState.colId).toLowerCase()
         const cmp = av < bv ? -1 : av > bv ? 1 : 0
         return sortState.dir === 'asc' ? cmp : -cmp
       })
-    : filteredResults
+    : baseResults
 
   // Filter panel computed values
   const fpFilter = filterPanel
@@ -941,6 +978,15 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                 >
                   Search
                 </button>
+                <label className="flex items-center gap-1 text-xs cursor-pointer select-none whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={isUnified}
+                    onChange={e => setIsUnified(e.target.checked)}
+                    className="accent-[#316AC5]"
+                  />
+                  Unified
+                </label>
               </div>
 
               {/* Status bar — fixed height, no layout shift */}
@@ -967,7 +1013,9 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                       {total > results.length
                         ? `Showing ${results.length} of ${total} results — refine to narrow.`
                         : results.length > 0
-                        ? `${results.length} result${results.length !== 1 ? 's' : ''}.`
+                        ? isUnified && baseResults.length < results.length
+                          ? `${baseResults.length} unique (${results.length} total).`
+                          : `${sortedResults.length} result${sortedResults.length !== 1 ? 's' : ''}.`
                         : queryMs !== null
                         ? 'No results found.'
                         : ''}
@@ -1133,10 +1181,26 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                               switch (col.id) {
                                 case "domain":
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate font-mono">
-                                      <span className={`text-[10px] px-1 rounded ${isSelected ? "bg-white/20" : "bg-[#E8E8E0] text-[#444]"}`}>
-                                        {r.region}/{r.environment}
-                                      </span>
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden">
+                                      <div className="flex flex-wrap gap-0.5">
+                                        {(r as UnifiedResult)._allDomains.sort((a, b) => (DOMAIN_PRIORITY[a] ?? 99) - (DOMAIN_PRIORITY[b] ?? 99)).map(dk => {
+                                          const [reg, env] = dk.split('_')
+                                          const badge = getDomainBadge(reg, env)
+                                          const isProd = env === 'prod'
+                                          return (
+                                            <span
+                                              key={dk}
+                                              title={dk}
+                                              className={isProd
+                                                ? 'bg-[#316AC5] text-white font-bold text-[9px] px-1 rounded-sm'
+                                                : 'bg-[#D4D0C8] text-[#444] text-[9px] px-1 border border-[#808080] rounded-sm'
+                                              }
+                                            >
+                                              {badge}
+                                            </span>
+                                          )
+                                        })}
+                                      </div>
                                     </td>
                                   )
                                 case "order": {

@@ -25,6 +25,11 @@ No test framework is configured.
 - `components/ui/` — 59 shadcn/ui components (Radix UI + Tailwind); do not edit these
 - `lib/utils.ts` — `cn()` utility (clsx + tailwind-merge)
 - `data/c152e_extract.csv` — 75MB+ source formulary data from the C152E system
+- `data/formulary.db` — local SQLite file; **no longer used** — app is fully migrated to Turso
+
+### Database
+
+The app uses **Turso** (libsql) exclusively. `DATABASE_URL` points to `libsql://inpatient-formulary-kpessa.aws-us-east-1.turso.io`. The local `data/formulary.db` file is stale and should be ignored. Schema is in `lib/schema.sql`; data was loaded via `scripts/migrate_to_turso.ts`.
 
 ### Key patterns
 
