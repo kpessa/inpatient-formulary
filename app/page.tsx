@@ -16,9 +16,25 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { FormularyItem } from "@/lib/types"
+
+type Scope =
+  | { type: 'all' }
+  | { type: 'domain'; region: string; env: string }
+  | { type: 'region'; region: string }
+  | { type: 'env'; env: string }
+
+function scopeLabel(scope: Scope): string {
+  switch (scope.type) {
+    case 'all': return 'All Domains'
+    case 'domain': return `${scope.region} ${scope.env}`
+    case 'region': return `${scope.region} (all)`
+    case 'env': return `${scope.env} (all regions)`
+  }
+}
 
 type TabId = "oe-defaults" | "dispense" | "inventory" | "clinical" | "supply" | "identifiers" | "tpn-details" | "change-log"
 
@@ -54,6 +70,8 @@ export default function PharmNetFormulary() {
   const [selectedItem, setSelectedItem] = useState<FormularyItem | null>(null)
   const [dateStr, setDateStr] = useState<string | null>(null)
   const [timeStr, setTimeStr] = useState<string | null>(null)
+  const [scope, setScope] = useState<Scope>({ type: 'all' })
+  const [availableDomains, setAvailableDomains] = useState<{ region: string; env: string; domain: string }[]>([])
 
   useEffect(() => {
     const updateTime = () => {
@@ -64,6 +82,13 @@ export default function PharmNetFormulary() {
     updateTime()
     const interval = setInterval(updateTime, 60000)
     return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/formulary/domains')
+      .then((r) => r.json())
+      .then((d) => setAvailableDomains(d.domains ?? []))
+      .catch(() => {})
   }, [])
 
   const [rect, setRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null)
@@ -344,7 +369,40 @@ export default function PharmNetFormulary() {
       <div className="flex items-center h-6 bg-[#D4D0C8] border-t border-[#808080] px-2 shrink-0" suppressHydrationWarning>
         <span className="flex-1 text-xs font-mono">Ready.</span>
         <div className="flex gap-0" suppressHydrationWarning>
-          <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center">C152E</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center gap-1 hover:bg-[#316AC5] hover:text-white focus:outline-none">
+                {scopeLabel(scope)} ▾
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="text-xs font-mono min-w-[160px]">
+              <DropdownMenuItem onClick={() => setScope({ type: 'all' })}>
+                All Domains
+              </DropdownMenuItem>
+              {availableDomains.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  {availableDomains.map((d) => (
+                    <DropdownMenuItem key={`${d.region}-${d.env}`} onClick={() => setScope({ type: 'domain', region: d.region, env: d.env })}>
+                      {d.region} {d.env}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  {[...new Set(availableDomains.map((d) => d.region))].map((r) => (
+                    <DropdownMenuItem key={`region-${r}`} onClick={() => setScope({ type: 'region', region: r })}>
+                      {r} (all)
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  {[...new Set(availableDomains.map((d) => d.env))].map((e) => (
+                    <DropdownMenuItem key={`env-${e}`} onClick={() => setScope({ type: 'env', env: e })}>
+                      {e} (all regions)
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center">PESSK</span>
           <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{dateStr}</span>
           <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{timeStr}</span>
@@ -353,6 +411,8 @@ export default function PharmNetFormulary() {
       {isSearchModalOpen && (
         <SearchModal
           initialSearchValue={searchValue}
+          scope={scope}
+          availableDomains={availableDomains}
           onClose={() => setIsSearchModalOpen(false)}
           onSelect={(item) => { setSelectedItem(item); setIsSearchModalOpen(false) }}
         />

@@ -35,12 +35,18 @@ export interface SearchResult {
   formularyStatus: string
   pyxisId: string
   activeFacilities: string[]
+  region: string
+  environment: string
+  searchMedication: boolean
+  searchContinuous: boolean
+  searchIntermittent: boolean
 }
 
 export interface SearchParams {
   q: string
   limit: number
-  domain?: string
+  region?: string
+  environment?: string
   showInactive: boolean
   facilities?: string | null
 }
@@ -48,7 +54,8 @@ export interface SearchParams {
 export async function searchFormulary({
   q,
   limit,
-  domain,
+  region,
+  environment,
   showInactive,
   facilities,
 }: SearchParams): Promise<{ results: SearchResult[]; total: number }> {
@@ -60,9 +67,14 @@ export async function searchFormulary({
     conditions.push("status = 'Active'")
   }
 
-  if (domain) {
-    conditions.push('domain = ?')
-    sqlArgs.push(domain)
+  if (region) {
+    conditions.push('region = ?')
+    sqlArgs.push(region)
+  }
+
+  if (environment) {
+    conditions.push('environment = ?')
+    sqlArgs.push(environment)
   }
 
   if (q) {
@@ -90,22 +102,68 @@ export async function searchFormulary({
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
+  // Fast path: no facility filter → single SQL query with LIMIT
+  if (!facilities) {
+    const { rows } = await db.execute({
+      sql: `SELECT group_id, description, generic_name, strength, strength_unit,
+                   dosage_form, mnemonic, status, charge_number, brand_name,
+                   formulary_status, pyxis_id, oe_defaults_json, inventory_json, region, environment
+            FROM formulary_groups ${where} LIMIT ?`,
+      args: [...sqlArgs, limit],
+    })
+    const results: SearchResult[] = rows.map((row) => {
+      const oe = JSON.parse((row.oe_defaults_json as string) || '{}') as {
+        searchMedication?: boolean; searchContinuous?: boolean; searchIntermittent?: boolean
+      }
+      const inv = JSON.parse((row.inventory_json as string) || '{}') as {
+        allFacilities: boolean
+        facilities: Record<string, boolean>
+      }
+      const activeFacilities = Object.keys(inv.facilities ?? {}).filter(k => inv.facilities[k])
+      return {
+        groupId: row.group_id as string,
+        description: row.description as string,
+        genericName: row.generic_name as string,
+        strength: row.strength as string,
+        strengthUnit: row.strength_unit as string,
+        dosageForm: row.dosage_form as string,
+        mnemonic: row.mnemonic as string,
+        status: row.status as 'Active' | 'Inactive',
+        chargeNumber: row.charge_number as string,
+        brandName: row.brand_name as string,
+        formularyStatus: row.formulary_status as string,
+        pyxisId: row.pyxis_id as string,
+        activeFacilities,
+        region: row.region as string,
+        environment: row.environment as string,
+        searchMedication: oe.searchMedication ?? false,
+        searchContinuous: oe.searchContinuous ?? false,
+        searchIntermittent: oe.searchIntermittent ?? false,
+      }
+    })
+    // total = -1 signals "limit may have been hit" to the UI
+    return { results, total: results.length === limit ? -1 : results.length }
+  }
+
+  // Slow path: facility filter active → fetch all rows, parse inventory_json, filter in JS
   const sql = `
     SELECT group_id, description, generic_name, strength, strength_unit,
            dosage_form, mnemonic, status, charge_number, brand_name,
-           formulary_status, pyxis_id, inventory_json
+           formulary_status, pyxis_id, oe_defaults_json, inventory_json, region, environment
     FROM formulary_groups
     ${where}
   `
 
   const { rows } = await db.execute({ sql, args: sqlArgs })
 
-  // Deserialize inventory_json for activeFacilities + facility filter
   type Mapped = SearchResult & { _allFacilities: boolean }
   let mapped: Mapped[] = rows.map((row) => {
     const inv = JSON.parse(row.inventory_json as string) as {
       allFacilities: boolean
       facilities: Record<string, boolean>
+    }
+    const oe = JSON.parse((row.oe_defaults_json as string) || '{}') as {
+      searchMedication?: boolean; searchContinuous?: boolean; searchIntermittent?: boolean
     }
     const activeFacilities = Object.keys(inv.facilities).filter((k) => inv.facilities[k])
     return {
@@ -123,25 +181,40 @@ export async function searchFormulary({
       pyxisId: row.pyxis_id as string,
       activeFacilities,
       _allFacilities: inv.allFacilities,
+      region: row.region as string,
+      environment: row.environment as string,
+      searchMedication: oe.searchMedication ?? false,
+      searchContinuous: oe.searchContinuous ?? false,
+      searchIntermittent: oe.searchIntermittent ?? false,
     }
   })
 
-  if (facilities) {
-    const facs = facilities
-      .split(',')
-      .map((f) => f.trim())
-      .filter(Boolean)
-    if (facs.length > 0) {
-      mapped = mapped.filter(
-        (item) => item._allFacilities || facs.some((f) => item.activeFacilities.includes(f))
-      )
-    }
+  const facs = facilities
+    .split(',')
+    .map((f) => f.trim())
+    .filter(Boolean)
+  if (facs.length > 0) {
+    mapped = mapped.filter(
+      (item) => item._allFacilities || facs.some((f) => item.activeFacilities.includes(f))
+    )
   }
 
   const total = mapped.length
   const results: SearchResult[] = mapped.slice(0, limit).map(({ _allFacilities, ...item }) => item)
 
   return { results, total }
+}
+
+export async function getAvailableDomains(): Promise<{ region: string; env: string; domain: string }[]> {
+  const db = getDb()
+  const { rows } = await db.execute(
+    'SELECT DISTINCT region, environment, domain FROM formulary_groups ORDER BY region, environment'
+  )
+  return rows.map((r) => ({
+    region: r.region as string,
+    env: r.environment as string,
+    domain: r.domain as string,
+  }))
 }
 
 export async function getFormularyItem(

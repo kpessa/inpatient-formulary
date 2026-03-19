@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -10,12 +10,36 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import type { FormularyItem } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
+
+type Scope =
+  | { type: 'all' }
+  | { type: 'domain'; region: string; env: string }
+  | { type: 'region'; region: string }
+  | { type: 'env'; env: string }
+
+function scopeLabel(scope: Scope): string {
+  switch (scope.type) {
+    case 'all': return 'All Domains'
+    case 'domain': return `${scope.region} ${scope.env}`
+    case 'region': return `${scope.region} (all)`
+    case 'env': return `${scope.env} (all regions)`
+  }
+}
 
 interface SearchModalProps {
   onClose: () => void
   initialSearchValue?: string
+  scope: Scope
+  availableDomains: { region: string; env: string; domain: string }[]
   onSelect: (item: FormularyItem) => void
 }
 
@@ -90,27 +114,34 @@ const DEFAULT_COLUMNS = [
   { name: "QOH Location 2", checked: false },
 ]
 
-export function SearchModal({ onClose, initialSearchValue = "", onSelect }: SearchModalProps) {
+export function SearchModal({ onClose, initialSearchValue = "", scope: initialScope, availableDomains, onSelect }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState(initialSearchValue)
+  const [scope, setScope] = useState<Scope>(initialScope)
 
   // Results state
   const [results, setResults] = useState<SearchResult[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [isSelecting, setIsSelecting] = useState(false)
   const [total, setTotal] = useState(0)
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [selectedResultIdx, setSelectedResultIdx] = useState<number | null>(null)
+  const [queryMs, setQueryMs] = useState<number | null>(null)
+  const [elapsedSec, setElapsedSec] = useState<number | null>(null)
+  const searchStartRef = useRef<number | null>(null)
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Columns: unified label + width, order is mutable
   const [cols, setCols] = useState([
-    { id: "order",       label: "Order...",          width: 90  },
-    { id: "facility",    label: "Facility",           width: 100 },
-    { id: "charge",      label: "Charge Nu...",       width: 100 },
-    { id: "pyxis",       label: "Pyxis Interface ID", width: 120 },
-    { id: "mnemonic",    label: "Mnemonic",           width: 90  },
-    { id: "generic",     label: "Generic Name",       width: 140 },
-    { id: "strength",    label: "Strength / Form",    width: 110 },
-    { id: "description", label: "Description",        width: 160 },
-    { id: "brand",       label: "Brand Name",         width: 100 },
+    { id: "domain",      label: "Domain",             width: 90  },
+    { id: "order",       label: "Order...",            width: 90  },
+    { id: "facility",    label: "Facility",            width: 100 },
+    { id: "charge",      label: "Charge Nu...",        width: 100 },
+    { id: "pyxis",       label: "Pyxis Interface ID",  width: 120 },
+    { id: "mnemonic",    label: "Mnemonic",            width: 90  },
+    { id: "generic",     label: "Generic Name",        width: 140 },
+    { id: "strength",    label: "Strength / Form",     width: 110 },
+    { id: "description", label: "Description",         width: 160 },
+    { id: "brand",       label: "Brand Name",          width: 100 },
   ])
   const resizingCol = useRef<{ idx: number; startX: number; startWidth: number } | null>(null)
   // Drag-to-reorder
@@ -120,25 +151,65 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
   const thRefs = useRef<(HTMLTableCellElement | null)[]>([])
   const tableRef = useRef<HTMLTableElement | null>(null)
 
+  // Column filter state
+  const [colFilters, setColFilters] = useState<Record<string, { text: string; selected: Set<string> }>>({})
+  const [filterPanel, setFilterPanel] = useState<{ colId: string; x: number; y: number } | null>(null)
+  const [filterPanelSearch, setFilterPanelSearch] = useState("")
+  const filterPanelRef = useRef<HTMLDivElement | null>(null)
+
   // Advanced tab state
   const [showIvSetFilter, setShowIvSetFilter] = useState(false)
   const [formularyStatusFilter, setFormularyStatusFilter] = useState(false)
   const [formularyStatusValue, setFormularyStatusValue] = useState("")
-  const [showInactive, setShowInactive] = useState(false)
+  const [showInactive, setShowInactive] = useState<boolean>(() => {
+    try {
+      const s = localStorage.getItem('pharmnet-search-settings')
+      return s ? (JSON.parse(s).showInactive ?? false) : false
+    } catch { return false }
+  })
   const [showTpnOnly, setShowTpnOnly] = useState(false)
   const [availableFacs, setAvailableFacs] = useState<string[]>([])
   const [selectedFacs, setSelectedFacs] = useState<string[]>([...ALL_FACILITIES])
   const [highlightedAvail, setHighlightedAvail] = useState<string | null>(null)
   const [highlightedSel, setHighlightedSel] = useState<string | null>(null)
 
-  // Settings tab state
-  const [maxResults, setMaxResults] = useState(20)
-  const [columns, setColumns] = useState(DEFAULT_COLUMNS)
+  // Settings tab state — loaded from / saved to localStorage
+  const [maxResults, setMaxResults] = useState<number>(() => {
+    try {
+      const s = localStorage.getItem('pharmnet-search-settings')
+      return s ? (JSON.parse(s).maxResults ?? 50) : 50
+    } catch { return 50 }
+  })
+  const [columns, setColumns] = useState<typeof DEFAULT_COLUMNS>(() => {
+    try {
+      const s = localStorage.getItem('pharmnet-search-settings')
+      return s ? (JSON.parse(s).columns ?? DEFAULT_COLUMNS) : DEFAULT_COLUMNS
+    } catch { return DEFAULT_COLUMNS }
+  })
   const [selectedColumnName, setSelectedColumnName] = useState<string | null>(null)
 
   // Modal position and sizing logic
   const [rect, setRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null)
+  const [isMaximized, setIsMaximized] = useState(false)
+  const preMaxRect = useRef<{ x: number, y: number, w: number, h: number } | null>(null)
   const isResizing = useRef<{ dir: string, startX: number, startY: number, startRect: { x: number, y: number, w: number, h: number } } | null>(null)
+
+  const toggleMaximize = () => {
+    if (isMaximized) {
+      setIsMaximized(false)
+      if (preMaxRect.current) setRect(preMaxRect.current)
+    } else {
+      preMaxRect.current = rect
+      setIsMaximized(true)
+    }
+  }
+
+  // Persist settings to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('pharmnet-search-settings', JSON.stringify({ maxResults, columns, showInactive }))
+    } catch {}
+  }, [maxResults, columns, showInactive])
 
   // Center initially
   useEffect(() => {
@@ -189,7 +260,7 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
       if (resizingCol.current) {
         const { idx, startX, startWidth } = resizingCol.current
         const dx = e.clientX - startX
-        const newWidth = Math.max(40, startWidth + dx)
+        const newWidth = Math.max(10, startWidth + dx)
         setCols(prev => prev.map((c, j) => j === idx ? { ...c, width: newWidth } : c))
         return
       }
@@ -261,6 +332,19 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [onClose])
 
+  // Close filter panel on outside click
+  useEffect(() => {
+    if (!filterPanel) return
+    const handleMouseDown = (e: MouseEvent) => {
+      if (filterPanelRef.current && !filterPanelRef.current.contains(e.target as Node)) {
+        setFilterPanel(null)
+        setFilterPanelSearch("")
+      }
+    }
+    document.addEventListener("mousedown", handleMouseDown)
+    return () => document.removeEventListener("mousedown", handleMouseDown)
+  }, [filterPanel])
+
   const autoFitColumn = (colIdx: number) => {
     if (!tableRef.current) return
 
@@ -301,34 +385,65 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
 
   const handleSearch = async () => {
     setIsLoading(true)
-    setSelectedGroupId(null)
+    setSelectedResultIdx(null)
+    setQueryMs(null)
+    setColFilters({})
+    setElapsedSec(null)
+    const t0 = performance.now()
+    searchStartRef.current = t0
+    // Delay 1 s before showing elapsed time; then update every second
+    const showAfter = setTimeout(() => {
+      setElapsedSec(1)
+      elapsedTimerRef.current = setInterval(() => {
+        setElapsedSec(Math.floor((performance.now() - t0) / 1000))
+      }, 1000)
+    }, 1000)
     try {
       const params = new URLSearchParams({ q: searchValue, limit: String(maxResults) })
       if (selectedFacs.length < ALL_FACILITIES.length) {
         params.set("facilities", selectedFacs.join(","))
       }
       if (!showInactive) params.set("showInactive", "false")
+      if (scope.type === 'domain') {
+        params.set('region', scope.region)
+        params.set('environment', scope.env)
+      } else if (scope.type === 'region') {
+        params.set('region', scope.region)
+      } else if (scope.type === 'env') {
+        params.set('environment', scope.env)
+      }
       const res = await fetch(`/api/formulary/search?${params}`)
       const data = await res.json()
+      const elapsed = Math.round(performance.now() - t0)
       setResults(data.results)
       setTotal(data.total)
+      setQueryMs(elapsed)
     } finally {
+      clearTimeout(showAfter)
+      if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null }
+      setElapsedSec(null)
       setIsLoading(false)
     }
   }
 
   const handleOkForGroup = async (groupId: string) => {
-    const res = await fetch(`/api/formulary/item?groupId=${encodeURIComponent(groupId)}`)
-    const data = await res.json()
-    if (data.item) {
-      onSelect(data.item)
+    setIsSelecting(true)
+    try {
+      const res = await fetch(`/api/formulary/item?groupId=${encodeURIComponent(groupId)}`)
+      const data = await res.json()
+      if (data.item) {
+        onSelect(data.item)
+      }
+      onClose()
+    } finally {
+      setIsSelecting(false)
     }
-    onClose()
   }
 
   const handleOk = async () => {
-    if (selectedGroupId) {
-      await handleOkForGroup(selectedGroupId)
+    if (selectedResultIdx !== null) {
+      const r = sortedResults[selectedResultIdx]
+      if (r) await handleOkForGroup(r.groupId)
     } else {
       onClose()
     }
@@ -384,7 +499,8 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
 
   const getSortValue = (r: SearchResult, colId: string): string => {
     switch (colId) {
-      case "order":       return r.formularyStatus
+      case "domain":      return `${r.region} ${r.environment}`
+      case "order":       return [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].join('')
       case "facility":    return r.activeFacilities[0] ?? ""
       case "charge":      return r.chargeNumber
       case "pyxis":       return r.pyxisId
@@ -397,14 +513,49 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
     }
   }
 
+  const getFilterKey = (r: SearchResult, colId: string): string => {
+    if (colId === 'strength') return r.dosageForm
+    return getSortValue(r, colId)
+  }
+
+  const filteredResults = useMemo(() => {
+    const activeFilters = Object.entries(colFilters).filter(
+      ([, f]) => f.text || f.selected.size > 0
+    )
+    if (activeFilters.length === 0) return results
+    return results.filter(r =>
+      activeFilters.every(([colId, filter]) => {
+        const cellVal = getSortValue(r, colId).toLowerCase()
+        const textPass = !filter.text || cellVal.includes(filter.text.toLowerCase())
+        const selectPass =
+          filter.selected.size === 0 || filter.selected.has(getFilterKey(r, colId))
+        return textPass && selectPass
+      })
+    )
+  }, [results, colFilters])
+
   const sortedResults = sortState
-    ? [...results].sort((a, b) => {
+    ? [...filteredResults].sort((a, b) => {
         const av = getSortValue(a, sortState.colId).toLowerCase()
         const bv = getSortValue(b, sortState.colId).toLowerCase()
         const cmp = av < bv ? -1 : av > bv ? 1 : 0
         return sortState.dir === 'asc' ? cmp : -cmp
       })
-    : results
+    : filteredResults
+
+  // Filter panel computed values
+  const fpFilter = filterPanel
+    ? (colFilters[filterPanel.colId] ?? { text: "", selected: new Set<string>() })
+    : null
+  const fpAllValues = filterPanel
+    ? [...new Set(results.map(r => getFilterKey(r, filterPanel.colId)))].sort()
+    : []
+  const fpVisibleValues = filterPanel && filterPanelSearch
+    ? fpAllValues.filter(v => v.toLowerCase().includes(filterPanelSearch.toLowerCase()))
+    : fpAllValues
+  const fpAllVisibleSelected =
+    fpVisibleValues.length > 0 && fpFilter !== null &&
+    fpVisibleValues.every(v => fpFilter!.selected.has(v))
 
   if (!rect) return null
 
@@ -414,31 +565,37 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
       <div className="absolute inset-0" />
 
       <div
-        className="absolute flex flex-col bg-[#D4D0C8] font-sans text-xs select-none shadow-[2px_2px_0px_#000000,-1px_-1px_0px_#FFFFFF] border border-[#808080]"
-        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        className={`flex flex-col bg-[#D4D0C8] font-sans text-xs select-none border border-[#808080] ${isMaximized ? "absolute inset-0" : "absolute shadow-[2px_2px_0px_#000000,-1px_-1px_0px_#FFFFFF]"}`}
+        style={isMaximized ? undefined : { left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
       >
-        {/* Resize Handles */}
-        <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
-        <div onPointerDown={handlePointerDown('s')} className="absolute bottom-0 left-2 right-2 h-1 cursor-s-resize z-20" />
-        <div onPointerDown={handlePointerDown('e')} className="absolute top-2 bottom-2 right-0 w-1 cursor-e-resize z-20" />
-        <div onPointerDown={handlePointerDown('w')} className="absolute top-2 bottom-2 left-0 w-1 cursor-w-resize z-20" />
-        <div onPointerDown={handlePointerDown('nw')} className="absolute top-0 left-0 w-2 h-2 cursor-nw-resize z-20" />
-        <div onPointerDown={handlePointerDown('ne')} className="absolute top-0 right-0 w-2 h-2 cursor-ne-resize z-20" />
-        <div onPointerDown={handlePointerDown('sw')} className="absolute bottom-0 left-0 w-2 h-2 cursor-sw-resize z-20" />
-        <div onPointerDown={handlePointerDown('se')} className="absolute bottom-0 right-0 w-2 h-2 cursor-se-resize z-20" />
+        {/* Resize Handles — hidden when maximized */}
+        {!isMaximized && <>
+          <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
+          <div onPointerDown={handlePointerDown('s')} className="absolute bottom-0 left-2 right-2 h-1 cursor-s-resize z-20" />
+          <div onPointerDown={handlePointerDown('e')} className="absolute top-2 bottom-2 right-0 w-1 cursor-e-resize z-20" />
+          <div onPointerDown={handlePointerDown('w')} className="absolute top-2 bottom-2 left-0 w-1 cursor-w-resize z-20" />
+          <div onPointerDown={handlePointerDown('nw')} className="absolute top-0 left-0 w-2 h-2 cursor-nw-resize z-20" />
+          <div onPointerDown={handlePointerDown('ne')} className="absolute top-0 right-0 w-2 h-2 cursor-ne-resize z-20" />
+          <div onPointerDown={handlePointerDown('sw')} className="absolute bottom-0 left-0 w-2 h-2 cursor-sw-resize z-20" />
+          <div onPointerDown={handlePointerDown('se')} className="absolute bottom-0 right-0 w-2 h-2 cursor-se-resize z-20" />
+        </>}
 
         {/* Title bar */}
         <div
           className="flex items-center justify-between bg-[#E69138] text-white px-2 h-7 shrink-0"
-          onPointerDown={handlePointerDown('move')}
+          onPointerDown={isMaximized ? undefined : handlePointerDown('move')}
+          onDoubleClick={toggleMaximize}
         >
           <div className="flex items-center gap-1.5 pointer-events-none">
             <div className="w-4 h-4 bg-white border border-white/40 flex items-center justify-center text-[8px] rounded-full text-blue-500 shadow-sm leading-none pt-0.5">💊</div>
             <span className="text-sm font-bold tracking-wide">Product Search</span>
+            <span className="text-xs font-mono opacity-80 ml-2">[{scopeLabel(scope)}]</span>
           </div>
           <div className="flex gap-1" onPointerDown={e => e.stopPropagation()}>
             <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
-            <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">□</button>
+            <button onClick={toggleMaximize} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none active:bg-[#808080]">
+              {isMaximized ? '❐' : '□'}
+            </button>
             <button onClick={onClose} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none active:bg-[#808080]">✕</button>
           </div>
         </div>
@@ -473,9 +630,9 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
           {activeTab === "main" && (
             <>
               {/* Top Section: Group Boxes */}
-              <div className="flex gap-2 shrink-0">
+              <div className="flex flex-col gap-2 shrink-0">
                 {/* Identifiers */}
-                <fieldset className="border border-gray-300 p-2 pt-3 relative flex-1">
+                <fieldset className="border border-gray-300 p-2 pt-3 relative">
                   <legend className="absolute -top-2 left-2 px-1 bg-[#F0F0F0] text-xs">Identifiers</legend>
                   <div className="flex flex-wrap gap-x-4 gap-y-2">
                     {["Generic name", "Brand name", "Mnemonic", "Description", "Charge number", "NDC"].map(label => (
@@ -502,11 +659,11 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                   </div>
                 </fieldset>
 
-                <div className="flex flex-col gap-2 shrink-0 w-56">
+                <div className="flex gap-2">
                   {/* Product Type */}
-                  <fieldset className="border border-gray-300 p-2 pt-3 relative">
+                  <fieldset className="border border-gray-300 p-2 pt-3 relative flex-1">
                     <legend className="absolute -top-2 left-2 px-1 bg-[#F0F0F0] text-xs">Product Type</legend>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                    <div className="flex gap-x-4 gap-y-1 flex-wrap">
                       {["Product", "IV Set", "Compound"].map(label => (
                         <label key={label} className="flex items-center gap-1 cursor-pointer">
                           <Checkbox defaultChecked className="h-3 w-3 rounded-none border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
@@ -521,9 +678,9 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                   </fieldset>
 
                   {/* Order Type */}
-                  <fieldset className="border border-gray-300 p-2 pt-3 relative">
+                  <fieldset className="border border-gray-300 p-2 pt-3 relative flex-1">
                     <legend className="absolute -top-2 left-2 px-1 bg-[#F0F0F0] text-xs">Order Type</legend>
-                    <div className="flex gap-x-3 gap-y-1 flex-wrap">
+                    <div className="flex gap-x-4 gap-y-1 flex-wrap">
                       {["Medication", "Intermittent", "Continuous"].map(label => (
                         <label key={label} className="flex items-center gap-1 cursor-pointer">
                           <Checkbox defaultChecked className="h-3 w-3 rounded-none border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
@@ -541,9 +698,52 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                 <Input
                   value={searchValue}
                   onChange={e => setSearchValue(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter") handleSearch() }}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") {
+                      if (selectedResultIdx !== null) {
+                        handleOk()
+                      } else {
+                        handleSearch()
+                      }
+                    }
+                  }}
                   className="h-5 text-xs font-sans rounded-none border-t-[#808080] border-l-[#808080] border-b-white border-r-white border px-1 py-0 w-64 bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus-visible:ring-0 focus-visible:ring-offset-0"
                 />
+                <span className="text-xs text-[#808080]">in:</span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="h-5 px-2 border border-[#808080] text-black bg-white text-xs flex items-center gap-1 shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] hover:bg-[#E8E8E0] min-w-[90px] max-w-[140px] truncate">
+                      {scopeLabel(scope)} ▾
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="text-xs font-mono min-w-[160px]">
+                    <DropdownMenuItem onClick={() => setScope({ type: 'all' })}>
+                      All Domains
+                    </DropdownMenuItem>
+                    {availableDomains.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {availableDomains.map((d) => (
+                          <DropdownMenuItem key={`${d.region}-${d.env}`} onClick={() => setScope({ type: 'domain', region: d.region, env: d.env })}>
+                            {d.region} {d.env}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        {[...new Set(availableDomains.map((d) => d.region))].map((r) => (
+                          <DropdownMenuItem key={`region-${r}`} onClick={() => setScope({ type: 'region', region: r })}>
+                            {r} (all)
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuSeparator />
+                        {[...new Set(availableDomains.map((d) => d.env))].map((e) => (
+                          <DropdownMenuItem key={`env-${e}`} onClick={() => setScope({ type: 'env', env: e })}>
+                            {e} (all regions)
+                          </DropdownMenuItem>
+                        ))}
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <button
                   onClick={handleSearch}
                   className="h-6 px-4 border border-[#808080] text-black bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] active:border-t-black active:border-l-black flex items-center justify-center text-xs ml-auto shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
@@ -552,16 +752,61 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                 </button>
               </div>
 
-              {/* Results hint */}
-              {total > 0 && total > results.length && (
-                <div className="px-1 text-xs text-[#808080] shrink-0">
-                  Showing {results.length} of {total} results. Refine your search to see more.
-                </div>
-              )}
+              {/* Status bar — fixed height, no layout shift */}
+              <div className="h-5 px-1 shrink-0 flex items-center justify-between text-xs text-[#808080]">
+                {isSelecting ? (
+                  <div className="flex items-center gap-2">
+                    <div className="w-32 h-3 border border-[#808080] bg-[#D4D0C8] overflow-hidden relative">
+                      <div className="absolute top-0 bottom-0 w-10 bg-[#316AC5] animate-[marquee_1.4s_linear_infinite]" />
+                    </div>
+                    <span>Loading…</span>
+                  </div>
+                ) : isLoading ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 h-3 border border-[#808080] bg-[#D4D0C8] overflow-hidden relative">
+                        <div className="absolute top-0 bottom-0 w-10 bg-[#316AC5] animate-[marquee_1.4s_linear_infinite]" />
+                      </div>
+                      <span>{elapsedSec !== null ? `${elapsedSec}s…` : 'Searching…'}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex items-center gap-1.5">
+                      {total === -1
+                        ? `Showing first ${results.length} results — refine to narrow.`
+                        : total > results.length
+                        ? `Showing ${results.length} of ${total} results — refine to narrow.`
+                        : results.length > 0
+                        ? `${results.length} result${results.length !== 1 ? 's' : ''}.`
+                        : queryMs !== null
+                        ? 'No results found.'
+                        : ''}
+                      {results.length > 0 && filteredResults.length < results.length && (
+                        <>
+                          <span className="text-[#316AC5]">({filteredResults.length} filtered)</span>
+                          <button
+                            onClick={() => setColFilters({})}
+                            className="text-[#316AC5] hover:text-red-600 font-bold leading-none"
+                            title="Clear all column filters"
+                          >
+                            ×
+                          </button>
+                        </>
+                      )}
+                    </span>
+                    {queryMs !== null && (
+                      <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0]">
+                        {queryMs >= 1000 ? `${(queryMs / 1000).toFixed(1)}s` : `${queryMs}ms`}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
 
               {/* Table */}
               <div className="flex-1 border border-[#808080] bg-white mt-1 overflow-auto shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)]">
-                <table ref={tableRef} className="table-fixed w-max min-w-full text-left border-collapse whitespace-nowrap">
+                <table ref={tableRef} className="table-fixed w-max text-left border-collapse whitespace-nowrap">
                   <colgroup>
                     <col style={{ width: 24 }} />
                     {cols.map((c) => <col key={c.id} style={{ width: c.width }} />)}
@@ -572,19 +817,21 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                       {cols.map((col, i) => {
                         const isDragging = colDrag?.from === i
                         const isDropTarget = colDrag !== null && colDrag.to === i && colDrag.from !== i
+                        const isFiltered = !!(colFilters[col.id] && (colFilters[col.id].text || colFilters[col.id].selected.size > 0))
                         return (
                           <th
                             key={col.id}
                             ref={el => { thRefs.current[i] = el }}
                             className={[
-                              "relative border-r border-b border-[#C0C0C0] px-2 py-0.5 font-normal text-xs bg-gradient-to-b from-white to-[#EAEAEA] shadow-[inset_-1px_-1px_0_#A0A0A0] overflow-hidden select-none",
+                              "relative border-r border-b border-[#C0C0C0] px-2 py-0.5 font-normal text-xs bg-gradient-to-b from-white to-[#EAEAEA] shadow-[inset_-1px_-1px_0_#A0A0A0] max-w-0 overflow-hidden select-none",
                               isDragging ? "opacity-40" : "",
                               isDropTarget ? "border-l-2 border-l-[#316AC5]" : "",
+                              isFiltered ? "border-b-2 border-b-[#316AC5]" : "",
                             ].join(" ")}
                           >
                             {/* Drag-to-reorder grab area */}
                             <span
-                              className={`block truncate pr-2 ${colDrag ? "cursor-grabbing" : "cursor-grab"}`}
+                              className={`block truncate pr-6 ${colDrag ? "cursor-grabbing" : "cursor-grab"}`}
                               onPointerDown={(e) => {
                                 e.preventDefault()
                                 e.stopPropagation()
@@ -597,6 +844,24 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                                 <span className="ml-1 text-[10px]">{sortState.dir === 'asc' ? '▲' : '▼'}</span>
                               )}
                             </span>
+                            {/* Filter button */}
+                            <button
+                              className={`absolute right-2 top-0 bottom-0 w-4 flex items-center justify-center text-[10px] hover:bg-[#316AC5]/20 z-10 ${isFiltered ? 'text-[#316AC5]' : 'text-[#A0A0A0]'}`}
+                              onPointerDown={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                const r = e.currentTarget.getBoundingClientRect()
+                                if (filterPanel?.colId === col.id) {
+                                  setFilterPanel(null)
+                                  setFilterPanelSearch("")
+                                } else {
+                                  setFilterPanel({ colId: col.id, x: r.left, y: r.bottom })
+                                  setFilterPanelSearch("")
+                                }
+                              }}
+                            >
+                              ▾
+                            </button>
                             {/* Resize handle */}
                             <div
                               className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-[#316AC5]/40 active:bg-[#316AC5]/60 z-10"
@@ -617,27 +882,23 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                     </tr>
                   </thead>
                   <tbody>
-                    {isLoading ? (
-                      <tr>
-                        <td colSpan={cols.length + 1} className="px-2 py-1 text-center text-[#808080]">Searching...</td>
-                      </tr>
-                    ) : results.length === 0 && total === 0 && !isLoading ? (
+                    {results.length === 0 && !isLoading ? (
                       <tr>
                         <td colSpan={cols.length + 1} className="px-2 py-1 text-center text-[#808080]">
-                          {searchValue ? "No results found." : "Enter a search term and click Search."}
+                          {queryMs !== null ? "No results found." : "Enter a search term and click Search."}
                         </td>
                       </tr>
                     ) : (
                       sortedResults.map((r, idx) => {
-                        const isSelected = selectedGroupId === r.groupId
+                        const isSelected = selectedResultIdx === idx
                         const strengthForm = [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(" ").trim()
                         const facCount = r.activeFacilities.length
                         const facDisplay = facCount === 0 ? "" : facCount === 1 ? r.activeFacilities[0] : "Multiple"
                         return (
                           <tr
-                            key={r.groupId}
-                            onClick={() => setSelectedGroupId(r.groupId)}
-                            onDoubleClick={() => { setSelectedGroupId(r.groupId); handleOkForGroup(r.groupId) }}
+                            key={`${r.groupId}-${idx}`}
+                            onClick={() => setSelectedResultIdx(idx)}
+                            onDoubleClick={() => { setSelectedResultIdx(idx); handleOkForGroup(r.groupId) }}
                             className={`border-b border-[#E0E0E0] cursor-pointer ${
                               isSelected
                                 ? "bg-[#316AC5] text-white"
@@ -649,15 +910,29 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                             <td className="px-1 py-0 text-center"><span className="text-[10px] text-gray-500">▦</span></td>
                             {cols.map(col => {
                               switch (col.id) {
-                                case "order":
-                                  return <td key={col.id} className="px-2 py-0.5 overflow-hidden truncate">{r.formularyStatus}</td>
+                                case "domain":
+                                  return (
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate font-mono">
+                                      <span className={`text-[10px] px-1 rounded ${isSelected ? "bg-white/20" : "bg-[#E8E8E0] text-[#444]"}`}>
+                                        {r.region}/{r.environment}
+                                      </span>
+                                    </td>
+                                  )
+                                case "order": {
+                                  const mic = [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].join('')
+                                  return (
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden">
+                                      {mic && <span className={`text-[10px] px-1 font-mono rounded ${isSelected ? "bg-white/20" : "bg-[#E8E8E0] text-[#444]"}`}>{mic}</span>}
+                                    </td>
+                                  )
+                                }
                                 case "facility":
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 relative group overflow-hidden">
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 relative group">
                                       {facCount > 1 ? (
                                         <>
-                                          <span className={`underline decoration-dashed ${isSelected ? "decoration-white bg-[#4a7fd4]" : "decoration-[#808080] bg-[#FFFFE1]"} px-1`}>Multiple</span>
-                                          <div className="hidden group-hover:block absolute left-0 top-full bg-[#FFFFE1] border border-black p-1 shadow z-50 min-w-[120px] text-black">
+                                          <span className={`underline decoration-dashed cursor-default ${isSelected ? "decoration-white bg-[#4a7fd4]" : "decoration-[#808080] bg-[#FFFFE1]"} px-1`}>Multiple</span>
+                                          <div className="hidden group-hover:block absolute left-0 top-full bg-[#FFFFE1] border border-black p-1 shadow z-[9999] min-w-[120px] text-black text-xs">
                                             {r.activeFacilities.map(f => <div key={f}>{f}</div>)}
                                           </div>
                                         </>
@@ -668,7 +943,7 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                                   )
                                 case "charge":
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 overflow-hidden">
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden">
                                       {r.chargeNumber && (
                                         <span className="flex items-center gap-1.5">
                                           <div className={`w-2 h-2 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`}></div>
@@ -677,12 +952,12 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                                       )}
                                     </td>
                                   )
-                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 overflow-hidden truncate">{r.pyxisId}</td>
-                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 overflow-hidden truncate">{r.mnemonic}</td>
-                                case "generic":     return <td key={col.id} className="px-2 py-0.5 overflow-hidden truncate">{r.genericName}</td>
-                                case "strength":    return <td key={col.id} className="px-2 py-0.5 overflow-hidden truncate">{strengthForm}</td>
-                                case "description": return <td key={col.id} className="px-2 py-0.5 overflow-hidden truncate">{r.description}</td>
-                                case "brand":       return <td key={col.id} className="px-2 py-0.5 overflow-hidden truncate">{r.brandName}</td>
+                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.pyxisId}</td>
+                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.mnemonic}</td>
+                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.genericName}</td>
+                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{strengthForm}</td>
+                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.description}</td>
+                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.brandName}</td>
                                 default:            return <td key={col.id} />
                               }
                             })}
@@ -693,6 +968,92 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
                   </tbody>
                 </table>
               </div>
+
+              {/* Filter Panel overlay — fixed position, outside table overflow */}
+              {filterPanel && fpFilter && (() => {
+                const panelW = 210
+                const panelH = 270
+                const clampedX = Math.min(filterPanel.x, window.innerWidth - panelW - 4)
+                const clampedY = Math.min(filterPanel.y, window.innerHeight - panelH - 4)
+                return (
+                  <div
+                    ref={filterPanelRef}
+                    style={{ position: 'fixed', left: clampedX, top: clampedY, zIndex: 60, width: panelW }}
+                    className="bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] text-xs font-sans"
+                    onMouseDown={e => e.stopPropagation()}
+                  >
+                    <div className="p-1.5 border-b border-[#C0C0C0]">
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Search values..."
+                        value={filterPanelSearch}
+                        onChange={e => setFilterPanelSearch(e.target.value)}
+                        className="w-full h-5 px-1 border border-[#808080] bg-white text-xs font-sans shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus:outline-none"
+                      />
+                    </div>
+                    <div className="max-h-44 overflow-y-auto">
+                      <div
+                        className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer hover:bg-[#E8F0FE] border-b border-[#E0E0E0]"
+                        onClick={() => {
+                          setColFilters(prev => {
+                            const f = prev[filterPanel.colId] ?? { text: "", selected: new Set<string>() }
+                            const next = new Set(f.selected)
+                            if (fpAllVisibleSelected) {
+                              fpVisibleValues.forEach(v => next.delete(v))
+                            } else {
+                              fpVisibleValues.forEach(v => next.add(v))
+                            }
+                            return { ...prev, [filterPanel.colId]: { ...f, selected: next } }
+                          })
+                        }}
+                      >
+                        <input type="checkbox" checked={fpAllVisibleSelected} readOnly className="w-3 h-3 cursor-pointer" />
+                        <span className="italic text-[#444]">(Select All)</span>
+                      </div>
+                      {fpVisibleValues.map(val => (
+                        <div
+                          key={val}
+                          className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer hover:bg-[#E8F0FE]"
+                          onClick={() => {
+                            setColFilters(prev => {
+                              const f = prev[filterPanel.colId] ?? { text: "", selected: new Set<string>() }
+                              const next = new Set(f.selected)
+                              if (next.has(val)) next.delete(val)
+                              else next.add(val)
+                              return { ...prev, [filterPanel.colId]: { ...f, selected: next } }
+                            })
+                          }}
+                        >
+                          <input type="checkbox" checked={fpFilter.selected.has(val)} readOnly className="w-3 h-3 cursor-pointer" />
+                          <span className="truncate">{val || <em className="text-[#808080]">(blank)</em>}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex justify-end gap-1 p-1.5 border-t border-[#C0C0C0]">
+                      <button
+                        onClick={() => {
+                          setColFilters(prev => {
+                            const next = { ...prev }
+                            delete next[filterPanel.colId]
+                            return next
+                          })
+                          setFilterPanelSearch("")
+                        }}
+                        className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+                      >
+                        Clear
+                      </button>
+                      <button
+                        onClick={() => { setFilterPanel(null); setFilterPanelSearch("") }}
+                        className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                )
+              })()}
             </>
           )}
 
@@ -896,7 +1257,8 @@ export function SearchModal({ onClose, initialSearchValue = "", onSelect }: Sear
           <div className="flex gap-2 pr-2">
             <button
               onClick={handleOk}
-              className="h-6 w-20 border border-black bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] active:border-t-black active:border-l-black flex items-center justify-center shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+              disabled={isSelecting}
+              className="h-6 w-20 border border-black bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] active:border-t-black active:border-l-black flex items-center justify-center shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {activeTab === "settings" ? "Save" : "OK"}
             </button>

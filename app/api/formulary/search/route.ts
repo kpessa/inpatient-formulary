@@ -10,12 +10,14 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 200)
   const facilitiesParam = searchParams.get("facilities")
   const showInactive = searchParams.get("showInactive") !== "false"
-  const domain = searchParams.get("domain") ?? undefined
+  const region = searchParams.get("region") ?? undefined
+  const environment = searchParams.get("environment") ?? undefined
 
   const { results, total } = await searchFormulary({
     q,
     limit,
-    domain,
+    region,
+    environment,
     showInactive,
     facilities: facilitiesParam,
   })

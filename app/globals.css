@@ -142,3 +142,8 @@
     padding: 0;
   }
 }
+
+@keyframes marquee {
+  0%   { left: -25%; }
+  100% { left: 100%; }
+}
