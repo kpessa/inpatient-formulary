@@ -135,7 +135,29 @@ else
   exit 0
 fi
 
-# ── 11. Delete old DB ─────────────────────────────────────────────────────────
+# ── 11. Update .env.local + restart dev server ───────────────────────────────
+log "Updating .env.local..."
+ENV_FILE="$(pwd)/.env.local"
+if [[ -f "$ENV_FILE" ]]; then
+  # Replace DATABASE_URL line in-place (works on both macOS and Linux)
+  sed -i.bak "s|^DATABASE_URL=.*|DATABASE_URL=\"${NEW_DB_URL}\"|" "$ENV_FILE" && rm -f "${ENV_FILE}.bak"
+  ok "Updated .env.local → $NEW_DB_URL"
+fi
+
+log "Restarting local dev server..."
+DEV_PID=$(pgrep -f "next dev" 2>/dev/null || true)
+if [[ -n "$DEV_PID" ]]; then
+  kill "$DEV_PID" 2>/dev/null || true
+  sleep 1
+  ok "Stopped dev server (PID $DEV_PID)"
+  # Restart in background, log to /tmp/next-dev.log
+  pnpm dev > /tmp/next-dev.log 2>&1 &
+  ok "Dev server restarted on http://localhost:3000 (log: /tmp/next-dev.log)"
+else
+  warn "No dev server running — start it with: pnpm dev"
+fi
+
+# ── 13. Delete old DB ─────────────────────────────────────────────────────────
 if [[ "$OLD_DB_NAME" == "$DB_NAME" ]]; then
   warn "Old and new DB names are the same — skipping delete"
 elif [[ -z "$OLD_DB_NAME" ]]; then
