@@ -7,6 +7,7 @@
  *
  * File → domain mapping:
  *   c152e_extract.csv  →  region: "east",    environment: "cert"
+ *   p152e_extract.csv  →  region: "east",    environment: "prod"
  *   p152w_extract.csv  →  region: "west",    environment: "prod"
  *   p152c_extract.csv  →  region: "central", environment: "prod"
  *
@@ -26,6 +27,7 @@ const SCHEMA_FILE = path.join(process.cwd(), 'lib', 'schema.sql')
 
 const FILES: { file: string; region: string; env: string }[] = [
   { file: 'c152e_extract.csv', region: 'east',    env: 'cert' },
+  { file: 'p152e_extract.csv', region: 'east',    env: 'prod' },
   { file: 'p152w_extract.csv', region: 'west',    env: 'prod' },
   { file: 'p152c_extract.csv', region: 'central', env: 'prod' },
 ]
