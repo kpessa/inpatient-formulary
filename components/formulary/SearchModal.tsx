@@ -45,9 +45,6 @@ interface SearchModalProps {
   onSelect: (item: FormularyItem) => void
 }
 
-const CACHE_VERSION = 'v2'
-const LS_CACHE_PREFIX = `pharmnet-search-cache:${CACHE_VERSION}:`
-
 const CORP_FACILITIES = new Set(["UHS Corp", "UHST", "UHSB"])
 
 const DOMAIN_PRIORITY: Record<string, number> = {
@@ -174,8 +171,6 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   const [isExpanding, setIsExpanding] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string } | null>(null)
-  const [fromCachedAt, setFromCachedAt] = useState<number | null>(null)
-  const searchCache = useRef<Map<string, { results: SearchResult[]; total: number; cachedAt: number }>>(new Map())
   const [total, setTotal] = useState(0)
   const [pendingTotal, setPendingTotal] = useState<number | null>(null)
   const [selectedResultIdx, setSelectedResultIdx] = useState<number | null>(null)
@@ -460,7 +455,6 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     setIsLoading(true)
     setSelectedResultIdx(null)
     setQueryMs(null)
-    setFromCachedAt(null)
     setColFilters({})
     setElapsedSec(null)
     setFieldStatus({})
@@ -489,27 +483,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       // For parallel path, classify which fields to actually query based on input format
       const fieldsToQuery = useParallel ? classifyActiveFields(searchValue, activeFields) : new Set<string>()
 
-      // Stable cache key: sorted fields suffix for parallel, base params for single-query
-      const cacheKey = useParallel
-        ? `${baseParams}&fields=${[...fieldsToQuery].sort().join(',')}`
-        : baseParams.toString()
-
-      // L1: in-memory
-      let cached = searchCache.current.get(cacheKey)
-      // L2: localStorage
-      if (!cached) {
-        try {
-          const raw = localStorage.getItem(LS_CACHE_PREFIX + cacheKey)
-          if (raw) { cached = JSON.parse(raw); searchCache.current.set(cacheKey, cached!) }
-        } catch { /* ignore */ }
-      }
-
-      if (cached) {
-        setResults(cached.results)
-        setTotal(cached.total)
-        setFromCachedAt(cached.cachedAt)
-        setTimeout(() => loadDetails(cached.results, gen), 0)
-      } else if (useParallel) {
+      if (useParallel) {
         // ── Parallel path: one fetch per field, results trickle in as each resolves ──
         if (fieldsToQuery.size === 0) {
           setResults([])
@@ -551,7 +525,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
           if (done) break
         }
 
-        // Deduplicate merged results for cache
+        // Deduplicate merged results
         const seen = new Set<string>()
         const finalResults = Object.values(fieldResults).flat().filter(r => {
           const key = `${r.groupId}|${r.region}|${r.environment}`
@@ -563,9 +537,6 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         setTotal(finalTotal)
         setQueryMs(Math.round(performance.now() - t0))
 
-        const entry = { results: finalResults, total: finalTotal, cachedAt: Date.now() }
-        searchCache.current.set(cacheKey, entry)
-        try { localStorage.setItem(LS_CACHE_PREFIX + cacheKey, JSON.stringify(entry)) } catch { /* quota */ }
         setTimeout(() => loadDetails(finalResults, gen), 0)
         } // end else (fieldsToQuery.size > 0)
       } else {
@@ -590,9 +561,6 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
           if (done) break outer
         }
         const elapsed = Math.round(performance.now() - t0)
-        const entry = { results: finalResults, total: finalTotal, cachedAt: Date.now() }
-        searchCache.current.set(cacheKey, entry)
-        try { localStorage.setItem(LS_CACHE_PREFIX + cacheKey, JSON.stringify(entry)) } catch { /* quota */ }
         setResults(finalResults)
         setTotal(finalTotal)
         setQueryMs(elapsed)
@@ -1111,13 +1079,6 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                         </div>
                         <span>Finding more…</span>
                       </div>
-                    ) : fromCachedAt !== null ? (
-                      <>
-                        <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0] text-[#808080]" title={`Cached at ${new Date(fromCachedAt).toLocaleTimeString()}`}>
-                          {(() => { const age = Date.now() - fromCachedAt; return age < 60_000 ? 'cached <1m ago' : age < 3_600_000 ? `cached ${Math.round(age / 60_000)}m ago` : age < 86_400_000 ? `cached ${Math.round(age / 3_600_000)}h ago` : `cached ${Math.round(age / 86_400_000)}d ago` })()}
-                        </span>
-                        {detailsLoading && <span className="text-[10px] text-[#808080] animate-pulse font-mono">loading details…</span>}
-                      </>
                     ) : queryMs !== null ? (
                       <>
                         <span className="font-mono text-[10px] border border-[#C0C0C0] px-1 bg-[#FFFFF0]">
@@ -1594,26 +1555,6 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                     className="w-14 h-5 text-xs px-1 border border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus:outline-none"
                   />
                   <span>products at a time.</span>
-                </div>
-              </fieldset>
-
-              {/* Cache */}
-              <fieldset className="border border-[#808080] px-3 pb-2 pt-1 relative shrink-0 bg-white shadow-[inset_1px_1px_0_#FFFFFF]">
-                <legend className="px-1 text-xs bg-white">Cache</legend>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span>Results are cached until a new extract is uploaded.</span>
-                  <button
-                    onClick={() => {
-                      searchCache.current.clear()
-                      Object.keys(localStorage)
-                        .filter(k => k.startsWith('pharmnet-search-cache:'))
-                        .forEach(k => localStorage.removeItem(k))
-                      setFromCachedAt(null)
-                    }}
-                    className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
-                  >
-                    Clear Cache
-                  </button>
                 </div>
               </fieldset>
 
