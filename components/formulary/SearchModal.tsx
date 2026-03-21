@@ -317,6 +317,8 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     } else {
       preMaxRect.current = rect
       setIsMaximized(true)
+      const w = Math.min(window.innerWidth, 1400)
+      setRect({ x: (window.innerWidth - w) / 2, y: 0, w, h: window.innerHeight })
     }
   }
 
@@ -900,11 +902,11 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       <div className="absolute inset-0" />
 
       <div
-        className={`flex flex-col bg-[#D4D0C8] font-sans text-xs select-none border border-[#808080] ${isMaximized ? "absolute inset-0" : "absolute shadow-[2px_2px_0px_#000000,-1px_-1px_0px_#FFFFFF]"}`}
-        style={isMaximized ? undefined : { left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        className={`flex flex-col bg-[#D4D0C8] font-sans text-xs select-none border border-[#808080] absolute shadow-[2px_2px_0px_#000000,-1px_-1px_0px_#FFFFFF]`}
+        style={rect ? { left: rect.x, top: rect.y, width: rect.w, height: rect.h } : undefined}
       >
-        {/* Resize Handles — hidden when maximized */}
-        {!isMaximized && <>
+        {/* Resize Handles */}
+        <>
           <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
           <div onPointerDown={handlePointerDown('s')} className="absolute bottom-0 left-2 right-2 h-1 cursor-s-resize z-20" />
           <div onPointerDown={handlePointerDown('e')} className="absolute top-2 bottom-2 right-0 w-1 cursor-e-resize z-20" />
@@ -913,7 +915,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
           <div onPointerDown={handlePointerDown('ne')} className="absolute top-0 right-0 w-2 h-2 cursor-ne-resize z-20" />
           <div onPointerDown={handlePointerDown('sw')} className="absolute bottom-0 left-0 w-2 h-2 cursor-sw-resize z-20" />
           <div onPointerDown={handlePointerDown('se')} className="absolute bottom-0 right-0 w-2 h-2 cursor-se-resize z-20" />
-        </>}
+        </>
 
         {/* Title bar */}
         <div
