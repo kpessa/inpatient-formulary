@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -17,8 +17,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Badge } from "@/components/ui/badge"
 import type { FormularyItem } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
+import { CompareModal } from "./CompareModal"
 
 type UnifiedResult = SearchResult & { _allDomains: string[] }
 
@@ -55,9 +57,46 @@ const DOMAIN_PRIORITY: Record<string, number> = {
 }
 function getDomainKey(r: SearchResult): string { return `${r.region}_${r.environment}` }
 function getDomainPriority(r: SearchResult): number { return DOMAIN_PRIORITY[getDomainKey(r)] ?? 99 }
+function isProd(r: SearchResult): boolean { return r.environment === 'prod' }
+function getSemanticKey(r: SearchResult): string {
+  if (r.pyxisId?.trim())      return `pyxis:${r.pyxisId.trim()}`
+  if (r.chargeNumber?.trim()) return `charge:${r.chargeNumber.trim()}`
+  return `group:${r.groupId}`
+}
 function getDomainBadge(region: string, env: string): string {
   const letter = region === 'east' ? 'E' : region === 'west' ? 'W' : 'C'
   return env === 'prod' ? letter : letter.toLowerCase()
+}
+
+function getDomainColor(region: string, env: string): { bg: string; text: string; border: string; tint: string } {
+  const hue = region === 'east' ? 213 : region === 'west' ? 142 : 32
+  const sat  = env === 'prod' ? 75 : env === 'cert' ? 60 : env === 'mock' ? 45 : 30
+  const light = env === 'prod' ? 35 : env === 'cert' ? 50 : env === 'mock' ? 63 : 78
+  return {
+    bg:     `hsl(${hue}, ${sat}%, ${light}%)`,
+    text:   light < 58 ? '#ffffff' : '#1a1a1a',
+    border: `hsl(${hue}, ${sat}%, ${Math.max(light - 12, 10)}%)`,
+    tint:   `hsl(${hue}, ${env === 'prod' ? 55 : 40}%, ${env === 'prod' ? 90 : 94}%)`,
+  }
+}
+
+function computeDiffCols(variants: UnifiedResult[]): Set<string> {
+  if (variants.length <= 1) return new Set()
+  const checks: [string, (r: UnifiedResult) => string][] = [
+    ['description', r => r.description],
+    ['generic',     r => r.genericName],
+    ['strength',    r => `${r.strength}|${r.strengthUnit}|${r.dosageForm}`],
+    ['mnemonic',    r => r.mnemonic],
+    ['charge',      r => r.chargeNumber],
+    ['brand',       r => r.brandName],
+    ['pyxis',       r => r.pyxisId],
+    ['order',       r => `${r.searchMedication}|${r.searchIntermittent}|${r.searchContinuous}`],
+  ]
+  const diffs = new Set<string>()
+  for (const [colId, getter] of checks) {
+    if (new Set(variants.map(getter)).size > 1) diffs.add(colId)
+  }
+  return diffs
 }
 
 
@@ -118,6 +157,29 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   )
 
   const [isUnified, setIsUnified] = useState(true)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [isCompareOpen, setIsCompareOpen] = useState(false)
+
+  const toggleExpand = useCallback((groupId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setExpandedGroups(prev => {
+      const next = new Set(prev)
+      next.has(groupId) ? next.delete(groupId) : next.add(groupId)
+      return next
+    })
+  }, [])
+
+  const [expandedRegions, setExpandedRegions] = useState<Set<string>>(new Set())
+
+  const toggleRegion = useCallback((semKey: string, region: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const key = `${semKey}:${region}`
+    setExpandedRegions(prev => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }, [])
 
   const [detailsLoading, setDetailsLoading] = useState(false)
 
@@ -184,16 +246,16 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
 
   // Columns: unified label + width, order is mutable
   const [cols, setCols] = useState([
-    { id: "domain",      label: "Domain",             width: 90  },
-    { id: "order",       label: "Order...",            width: 90  },
-    { id: "facility",    label: "Facility",            width: 100 },
-    { id: "charge",      label: "Charge Nu...",        width: 100 },
-    { id: "pyxis",       label: "Pyxis Interface ID",  width: 120 },
-    { id: "mnemonic",    label: "Mnemonic",            width: 90  },
-    { id: "generic",     label: "Generic Name",        width: 140 },
-    { id: "strength",    label: "Strength / Form",     width: 110 },
-    { id: "description", label: "Description",         width: 160 },
-    { id: "brand",       label: "Brand Name",          width: 100 },
+    { id: "domain",      label: "Domain",             width: 90,  align: 'center' as const },
+    { id: "order",       label: "Type",               width: 90,  align: 'center' as const },
+    { id: "facility",    label: "Facility",           width: 100, align: 'left'   as const },
+    { id: "charge",      label: "CDM",                width: 100, align: 'center' as const },
+    { id: "pyxis",       label: "Med ID",             width: 120, align: 'center' as const },
+    { id: "mnemonic",    label: "Mnemonic",           width: 90,  align: 'center' as const },
+    { id: "generic",     label: "Generic Name",       width: 140, align: 'left'   as const },
+    { id: "strength",    label: "Strength / Form",    width: 110, align: 'left'   as const },
+    { id: "description", label: "Description",        width: 160, align: 'left'   as const },
+    { id: "brand",       label: "Brand Name",         width: 100, align: 'left'   as const },
   ])
   const resizingCol = useRef<{ idx: number; startX: number; startWidth: number } | null>(null)
   // Drag-to-reorder
@@ -257,6 +319,15 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       setIsMaximized(true)
     }
   }
+
+  // Auto-fit columns when maximizing so they use the extra space
+  useEffect(() => {
+    if (!isMaximized) return
+    const id = requestAnimationFrame(() => {
+      cols.forEach((col, i) => { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(i) })
+    })
+    return () => cancelAnimationFrame(id)
+  }, [isMaximized])
 
   // Load facilities from DB on mount
   useEffect(() => {
@@ -432,8 +503,8 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     if (th) {
       const span = th.querySelector('span')
       probe.textContent = span?.textContent ?? ''
-      // 16px cell padding + 8px resize handle clearance
-      maxWidth = Math.max(maxWidth, probe.offsetWidth + 24)
+      // 8px left px-2 + 24px pr-6 (clears filter button) + 12px buffer
+      maxWidth = Math.max(maxWidth, probe.offsetWidth + 44)
     }
 
     // Measure every visible body cell in this column
@@ -765,11 +836,12 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     if (!isUnified) {
       return filteredResults.map(r => ({ ...r, _allDomains: [getDomainKey(r)] }))
     }
-    const byGroupId = new Map<string, UnifiedResult>()
+    const bySemanticKey = new Map<string, UnifiedResult>()
     for (const r of filteredResults) {
-      const existing = byGroupId.get(r.groupId)
+      const key = getSemanticKey(r)
+      const existing = bySemanticKey.get(key)
       if (!existing || getDomainPriority(r) < getDomainPriority(existing)) {
-        byGroupId.set(r.groupId, {
+        bySemanticKey.set(key, {
           ...r,
           _allDomains: existing ? [...existing._allDomains, getDomainKey(r)] : [getDomainKey(r)],
         })
@@ -777,8 +849,22 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
         existing._allDomains.push(getDomainKey(r))
       }
     }
-    return Array.from(byGroupId.values())
+    return Array.from(bySemanticKey.values())
   }, [filteredResults, isUnified])
+
+  const variantsByGroup = useMemo(() => {
+    const map = new Map<string, UnifiedResult[]>()
+    for (const r of filteredResults) {
+      const key = getSemanticKey(r)
+      const entry = map.get(key) ?? []
+      entry.push({ ...r, _allDomains: [getDomainKey(r)] })
+      map.set(key, entry)
+    }
+    for (const [gid, list] of map) {
+      map.set(gid, list.sort((a, b) => getDomainPriority(a) - getDomainPriority(b)))
+    }
+    return map
+  }, [filteredResults])
 
   const sortedResults = sortState
     ? [...baseResults].sort((a, b) => {
@@ -808,6 +894,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
   if (!rect) return null
 
   return (
+    <>
     <div className="fixed inset-0 z-50 pointer-events-auto overflow-hidden">
       {/* Dimmed background overlay */}
       <div className="absolute inset-0" />
@@ -1018,6 +1105,28 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                   />
                   Unified
                 </label>
+                {(() => {
+                  const selectedRow = selectedResultIdx !== null ? sortedResults[selectedResultIdx] : null
+                  const domainCount = selectedRow ? (variantsByGroup.get(getSemanticKey(selectedRow))?.length ?? 0) : 0
+                  return (
+                    <>
+                      <button
+                        disabled={!selectedRow || domainCount <= 1}
+                        onClick={() => setIsCompareOpen(true)}
+                        className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Compare
+                      </button>
+                      <button
+                        onClick={() => cols.forEach((col, i) => { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(i) })}
+                        className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+                        title="Fit all columns to content"
+                      >
+                        Autofit
+                      </button>
+                    </>
+                  )
+                })()}
               </div>
 
               {/* Status bar — fixed height, no layout shift */}
@@ -1121,6 +1230,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                             {/* Drag-to-reorder grab area */}
                             <span
                               className={`block truncate pr-6 ${colDrag ? "cursor-grabbing" : "cursor-grab"}`}
+                              style={{ textAlign: col.align }}
                               onPointerDown={(e) => {
                                 e.preventDefault()
                                 e.stopPropagation()
@@ -1184,7 +1294,10 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                         const realFacs = r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
                         const facCount = realFacs.length
                         const facDisplay = facCount === 0 ? "" : facCount === 1 ? realFacs[0] : "Multiple"
-                        return (
+                        const parentDiffCols = isUnified
+                          ? computeDiffCols((variantsByGroup.get(getSemanticKey(r)) ?? []).filter(isProd))
+                          : new Set<string>()
+                        const parentRow = (
                           <tr
                             key={`${r.groupId}-${idx}`}
                             onClick={() => setSelectedResultIdx(idx)}
@@ -1208,37 +1321,52 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                 : "bg-[#F8F8F8] hover:bg-[#F0F8FF]"
                             }`}
                           >
-                            <td className="px-1 py-0 text-center"><span className="text-[10px] text-gray-500">▦</span></td>
+                            <td className="px-1 py-0 text-center w-5 shrink-0">
+                              {isUnified && (variantsByGroup.get(getSemanticKey(r))?.length ?? 0) > 1 ? (
+                                <button
+                                  onClick={e => toggleExpand(getSemanticKey(r), e)}
+                                  className={`text-[10px] font-bold leading-none w-4 h-4 flex items-center justify-center rounded
+                                    ${isSelected ? 'text-white/80 hover:bg-white/20' : 'text-[#316AC5] hover:bg-[#E0EAFF]'}`}
+                                  title={expandedGroups.has(getSemanticKey(r)) ? 'Collapse domains' : 'Expand domains'}
+                                >
+                                  {expandedGroups.has(getSemanticKey(r)) ? '−' : '+'}
+                                </button>
+                              ) : (
+                                <span className="text-[10px] text-gray-400">▦</span>
+                              )}
+                            </td>
                             {cols.map(col => {
+                              const pDiff = !isSelected && parentDiffCols.has(col.id)
+                              const pDiffStyle = pDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
                               switch (col.id) {
-                                case "domain":
+                                case "domain": {
+                                  const variants = variantsByGroup.get(getSemanticKey(r)) ?? []
+                                  const prodRegions = new Set(variants.filter(isProd).map(v => v.region))
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden">
-                                      <div className="flex flex-wrap gap-0.5">
-                                        {(r as UnifiedResult)._allDomains.sort((a, b) => (DOMAIN_PRIORITY[a] ?? 99) - (DOMAIN_PRIORITY[b] ?? 99)).map(dk => {
-                                          const [reg, env] = dk.split('_')
-                                          const badge = getDomainBadge(reg, env)
-                                          const isProd = env === 'prod'
+                                    <td key={col.id} className="px-2 py-0.5" style={{ textAlign: col.align }}>
+                                      <div className="inline-flex rounded-sm overflow-hidden border border-[#B0B0A8]">
+                                        {(['west','central','east'] as const).map((reg, i) => {
+                                          const inProd = prodRegions.has(reg)
+                                          const { bg, text } = getDomainColor(reg, 'prod')
+                                          const letter = reg === 'east' ? 'E' : reg === 'west' ? 'W' : 'C'
                                           return (
                                             <span
-                                              key={dk}
-                                              title={dk}
-                                              className={isProd
-                                                ? 'bg-[#316AC5] text-white font-bold text-[9px] px-1 rounded-sm'
-                                                : 'bg-[#D4D0C8] text-[#444] text-[9px] px-1 border border-[#808080] rounded-sm'
-                                              }
+                                              key={reg}
+                                              style={inProd ? { background: bg, color: text } : { background: '#E8E8E4', color: '#C0C0C0' }}
+                                              className={`text-[9px] px-1.5 h-[16px] font-bold leading-none select-none flex items-center ${i > 0 ? 'border-l border-l-black/20' : ''}`}
                                             >
-                                              {badge}
+                                              {letter}
                                             </span>
                                           )
                                         })}
                                       </div>
                                     </td>
                                   )
+                                }
                                 case "order": {
                                   const mic = [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].join('')
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden">
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>
                                       {mic
                                         ? <span className={`text-[10px] px-1 font-mono rounded ${isSelected ? "bg-white/20" : "bg-[#E8E8E0] text-[#444]"}`}>{mic}</span>
                                         : detailsLoading
@@ -1247,38 +1375,64 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                     </td>
                                   )
                                 }
-                                case "facility":
+                                case "facility": {
+                                  // In unified mode, aggregate facilities across all variants;
+                                  // each facility gets the color of its highest-priority (prod-first) domain.
+                                  const facBars: { fac: string; region: string; env: string }[] = (() => {
+                                    if (!isUnified) return realFacs.map(f => ({ fac: f, region: r.region, env: r.environment }))
+                                    const variants = variantsByGroup.get(getSemanticKey(r)) ?? []
+                                    const facBest = new Map<string, { region: string; env: string; priority: number }>()
+                                    for (const v of variants) {
+                                      const priority = getDomainPriority(v)
+                                      for (const fac of v.activeFacilities.filter(f => !CORP_FACILITIES.has(f))) {
+                                        const cur = facBest.get(fac)
+                                        if (!cur || priority < cur.priority) facBest.set(fac, { region: v.region, env: v.environment, priority })
+                                      }
+                                    }
+                                    return [...facBest.entries()]
+                                      .sort((a, b) => a[1].priority - b[1].priority)
+                                      .map(([fac, { region, env }]) => ({ fac, region, env }))
+                                  })()
+                                  const uniFacCount = facBars.length
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 max-w-0 relative group">
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 relative group" style={{ ...pDiffStyle, textAlign: col.align }}>
                                       {facilitiesLoading && facCount === 0 && r.activeFacilities.length === 0 ? (
                                         <span className="text-[#A0A0A0] italic">loading…</span>
                                       ) : detailsLoading && facCount === 0 && r.activeFacilities.length === 0 ? (
                                         <span className={`text-[10px] animate-pulse ${isSelected ? "text-white/40" : "text-[#B0B0B0]"}`}>···</span>
-                                      ) : facCount === 0 && r.activeFacilities.length === 0 ? null : facCount === 0 ? (
+                                      ) : uniFacCount === 0 && r.activeFacilities.length === 0 ? null : uniFacCount === 0 ? (
                                         <span className={`text-[10px] italic ${isSelected ? "text-white/50" : "text-[#B0B0B0]"}`}>corp only</span>
-                                      ) : facCount === 1 ? (
-                                        <span className="truncate block">{realFacs[0]}</span>
+                                      ) : uniFacCount === 1 ? (
+                                        <span className="truncate block">{facBars[0].fac}</span>
                                       ) : (
                                         <>
-                                          <div className="flex gap-px items-center w-full overflow-hidden">
-                                            {realFacs.map(f => (
+                                          <div className="flex flex-wrap gap-[2px]">
+                                            {facBars.map(({ fac, region, env }) => (
                                               <div
-                                                key={f}
-                                                className={`flex-1 h-2 min-w-[2px] max-w-[8px] rounded-[1px] ${isSelected ? "bg-white/80" : "bg-[#316AC5]"}`}
+                                                key={fac}
+                                                title={fac}
+                                                style={isSelected ? {} : { background: getDomainColor(region, env).bg }}
+                                                className={`w-[5px] h-[5px] rounded-[1px] shrink-0 ${isSelected ? "bg-white/80" : ""}`}
                                               />
                                             ))}
                                           </div>
                                           <div className="hidden group-hover:block absolute left-full top-2 ml-1 bg-[#FFFFE1] border border-black p-1 shadow z-[9999] min-w-[140px] text-black text-xs whitespace-nowrap">
-                                            <div className="font-bold mb-0.5 border-b border-[#C0C0C0] pb-0.5">{facCount} facilities</div>
-                                            {[...realFacs].sort().map(f => <div key={f}>{f}</div>)}
+                                            <div className="font-bold mb-0.5 border-b border-[#C0C0C0] pb-0.5">{uniFacCount} facilities</div>
+                                            {facBars.map(({ fac, region, env }) => (
+                                              <div key={fac} className="flex items-center gap-1">
+                                                <span style={{ background: getDomainColor(region, env).bg }} className="w-2 h-2 rounded-[1px] inline-block shrink-0" />
+                                                {fac}
+                                              </div>
+                                            ))}
                                           </div>
                                         </>
                                       )}
                                     </td>
                                   )
+                                }
                                 case "charge":
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden">
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>
                                       {r.chargeNumber && (
                                         <span className="flex items-center gap-1.5">
                                           <div className={`w-2 h-2 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`}></div>
@@ -1287,17 +1441,148 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                       )}
                                     </td>
                                   )
-                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.pyxisId}</td>
-                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.mnemonic}</td>
-                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.genericName}</td>
-                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{strengthForm}</td>
-                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.description}</td>
-                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate">{r.brandName}</td>
+                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.pyxisId}</td>
+                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.mnemonic}</td>
+                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.genericName}</td>
+                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{strengthForm}</td>
+                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.description}</td>
+                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.brandName}</td>
                                 default:            return <td key={col.id} />
                               }
                             })}
                           </tr>
                         )
+                        const childRows = isUnified && expandedGroups.has(getSemanticKey(r))
+                          ? (() => {
+                              const variants = variantsByGroup.get(getSemanticKey(r)) ?? []
+                              const regionOrder = ['west', 'central', 'east']
+                              const prodVariants = variants.filter(isProd)
+                                .sort((a, b) => regionOrder.indexOf(a.region) - regionOrder.indexOf(b.region))
+                              const diffCols = computeDiffCols(prodVariants)
+
+                              return prodVariants.flatMap(v => {
+                                const dk = getDomainKey(v)
+                                const [vreg] = dk.split('_')
+                                const { bg: vbg, text: vtext, border: vborder } = getDomainColor(vreg, 'prod')
+                                const nonProdForRegion = variants.filter(nv => nv.region === vreg && !isProd(nv))
+                                const regionKey = `${getSemanticKey(r)}:${vreg}`
+                                const isRegionExpanded = expandedRegions.has(regionKey)
+                                const vStrengthForm = [v.strength, v.strengthUnit, v.dosageForm].filter(Boolean).join(' ')
+
+                                const prodRow = (
+                                  <tr key={`${v.groupId}-${dk}-l1`}
+                                    className="border-b border-[#E0E0E0] text-[11px]"
+                                    style={{ borderLeft: `4px solid ${vborder}`, background: getDomainColor(vreg, 'prod').tint }}
+                                  >
+                                    <td className="pl-1 pr-0 py-0 text-center w-5 shrink-0">
+                                      {nonProdForRegion.length > 0 && (
+                                        <button
+                                          onClick={e => toggleRegion(getSemanticKey(r), vreg, e)}
+                                          className="text-[10px] font-bold leading-none w-4 h-4 flex items-center justify-center rounded text-[#316AC5] hover:bg-[#E0EAFF]"
+                                          title={isRegionExpanded ? 'Collapse non-prod' : 'Expand non-prod'}
+                                        >
+                                          {isRegionExpanded ? '−' : '+'}
+                                        </button>
+                                      )}
+                                    </td>
+                                    {cols.map(col => {
+                                      const isDiff = diffCols.has(col.id)
+                                      const diffStyle = isDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
+                                      switch (col.id) {
+                                        case 'domain': return (
+                                          <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>
+                                            <span style={{ background: vbg, color: vtext }}
+                                              className="text-[9px] font-bold px-1 rounded-sm">{getDomainBadge(vreg, 'prod')}</span>
+                                          </td>
+                                        )
+                                        case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.description}</td>
+                                        case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.genericName}</td>
+                                        case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{vStrengthForm}</td>
+                                        case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.mnemonic}</td>
+                                        case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{v.chargeNumber}</td>
+                                        case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.brandName}</td>
+                                        case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.pyxisId}</td>
+                                        case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{[v.searchMedication && 'Med', v.searchIntermittent && 'Int', v.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
+                                        case 'facility': {
+                                          const vFacs = v.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
+                                          if (vFacs.length === 0) return <td key={col.id} style={{ ...diffStyle, textAlign: col.align }} />
+                                          if (vFacs.length === 1) return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{vFacs[0]}</td>
+                                          return (
+                                            <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>
+                                              <div className="flex flex-wrap gap-[2px]">
+                                                {vFacs.map(f => <div key={f} title={f} style={{ background: vbg }} className="w-[5px] h-[5px] rounded-[1px] shrink-0" />)}
+                                              </div>
+                                            </td>
+                                          )
+                                        }
+                                        default:            return <td key={col.id} style={{ ...diffStyle, textAlign: col.align }} />
+                                      }
+                                    })}
+                                  </tr>
+                                )
+
+                                if (!isRegionExpanded || nonProdForRegion.length === 0) return [prodRow]
+
+                                const nonProdDiffCols = computeDiffCols([v, ...nonProdForRegion])
+                                const subRows = nonProdForRegion.map(nv => {
+                                  const ndk = getDomainKey(nv)
+                                  const [, nenv] = ndk.split('_')
+                                  const { bg: nbg, text: ntext, border: nborder } = getDomainColor(vreg, nenv)
+                                  const nvStrengthForm = [nv.strength, nv.strengthUnit, nv.dosageForm].filter(Boolean).join(' ')
+                                  return (
+                                    <tr key={`${nv.groupId}-${ndk}-l2`}
+                                      className="border-b border-[#E8E8E8] text-[11px]"
+                                      style={{ borderLeft: `4px solid ${nborder}`, background: getDomainColor(vreg, nenv).tint }}
+                                    >
+                                      <td className="pl-5 pr-0 py-0 text-center w-5 shrink-0">
+                                        <span style={{ background: nbg, color: ntext }}
+                                          className="text-[9px] font-bold px-1 rounded-sm inline-block">
+                                          {getDomainBadge(vreg, nenv)}
+                                        </span>
+                                      </td>
+                                      {cols.map(col => {
+                                        const isDiff = nonProdDiffCols.has(col.id)
+                                        const diffStyle = isDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
+                                        switch (col.id) {
+                                          case 'domain': return (
+                                            <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>
+                                              <span style={{ background: nbg, color: ntext }}
+                                                className="text-[9px] font-bold px-1 rounded-sm">{getDomainBadge(vreg, nenv)}</span>
+                                              <span className="text-[9px] text-[#888] ml-1">{nenv}</span>
+                                            </td>
+                                          )
+                                          case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.description}</td>
+                                          case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.genericName}</td>
+                                          case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nvStrengthForm}</td>
+                                          case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.mnemonic}</td>
+                                          case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{nv.chargeNumber}</td>
+                                          case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.brandName}</td>
+                                          case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.pyxisId}</td>
+                                          case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{[nv.searchMedication && 'Med', nv.searchIntermittent && 'Int', nv.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
+                                          case 'facility': {
+                                            const nvFacs = nv.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
+                                            if (nvFacs.length === 0) return <td key={col.id} style={{ ...diffStyle, textAlign: col.align }} />
+                                            if (nvFacs.length === 1) return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nvFacs[0]}</td>
+                                            return (
+                                              <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>
+                                                <div className="flex flex-wrap gap-[2px]">
+                                                  {nvFacs.map(f => <div key={f} title={f} style={{ background: nbg }} className="w-[5px] h-[5px] rounded-[1px] shrink-0" />)}
+                                                </div>
+                                              </td>
+                                            )
+                                          }
+                                          default:            return <td key={col.id} style={{ ...diffStyle, textAlign: col.align }} />
+                                        }
+                                      })}
+                                    </tr>
+                                  )
+                                })
+
+                                return [prodRow, ...subRows]
+                              })
+                            })()
+                          : null
+                        return childRows ? <>{parentRow}{childRows}</> : parentRow
                       })
                     )}
                   </tbody>
@@ -1629,5 +1914,20 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
 
       </div>
     </div>
+
+    {isCompareOpen && (() => {
+      const selectedRow = selectedResultIdx !== null ? sortedResults[selectedResultIdx] : null
+      if (!selectedRow) return null
+      const variants = variantsByGroup.get(getSemanticKey(selectedRow)) ?? []
+      const domains = variants.map(getDomainKey)
+      return (
+        <CompareModal
+          groupId={selectedRow.groupId}
+          domains={domains}
+          onClose={() => setIsCompareOpen(false)}
+        />
+      )
+    })()}
+    </>
   )
 }
