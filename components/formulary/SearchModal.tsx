@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -20,7 +20,9 @@ import {
 import { Badge } from "@/components/ui/badge"
 import type { FormularyItem } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
+import type { DomainValue } from "@/lib/formulary-diff"
 import { CompareModal } from "./CompareModal"
+import { RecentSearchDropdown } from "./RecentSearchDropdown"
 
 type UnifiedResult = SearchResult & { _allDomains: string[] }
 
@@ -41,10 +43,12 @@ function scopeLabel(scope: Scope): string {
 
 interface SearchModalProps {
   onClose: () => void
-  initialSearchValue?: string
+  hidden?: boolean
+  searchTrigger?: { value: string; seq: number } | null
   scope: Scope
   availableDomains: { region: string; env: string; domain: string }[]
   onSelect: (item: FormularyItem) => void
+  onCreateTask?: (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[]) => void
 }
 
 const CORP_FACILITIES = new Set(["UHS Corp", "UHST", "UHSB"])
@@ -99,6 +103,28 @@ function computeDiffCols(variants: UnifiedResult[]): Set<string> {
   return diffs
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  description: 'Description',
+  generic:     'Generic Name',
+  strength:    'Strength / Form',
+  mnemonic:    'Mnemonic',
+  charge:      'Charge Number',
+  brand:       'Brand Name',
+  pyxis:       'Pyxis ID',
+}
+
+function getFieldValue(r: UnifiedResult, colId: string): string {
+  switch (colId) {
+    case 'description': return r.description ?? ''
+    case 'generic':     return r.genericName ?? ''
+    case 'strength':    return [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(' ')
+    case 'mnemonic':    return r.mnemonic ?? ''
+    case 'charge':      return r.chargeNumber ?? ''
+    case 'brand':       return r.brandName ?? ''
+    case 'pyxis':       return r.pyxisId ?? ''
+    default:            return ''
+  }
+}
 
 const DEFAULT_COLUMNS = [
   { name: "Product Type", checked: false },
@@ -148,10 +174,13 @@ function classifyActiveFields(q: string, activeFields: Set<string>): Set<string>
   return new Set(candidates.filter(f => activeFields.has(f)))
 }
 
-export function SearchModal({ onClose, initialSearchValue = "", scope: initialScope, availableDomains, onSelect }: SearchModalProps) {
+export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
-  const [searchValue, setSearchValue] = useState(initialSearchValue)
+  const [searchValue, setSearchValue] = useState("")
   const [scope, setScope] = useState<Scope>(initialScope)
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('pharmnet-recent-searches') ?? '[]') } catch { return [] }
+  })
   const [activeFields, setActiveFields] = useState<Set<string>>(
     () => new Set(['description', 'generic_name', 'brand_name', 'mnemonic', 'charge_number', 'pyxis_id', 'ndc'])
   )
@@ -522,7 +551,16 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     setCols(prev => prev.map((c, j) => j === colIdx ? { ...c, width: maxWidth } : c))
   }
 
-  const handleSearch = async () => {
+  const handleSearch = async (queryOverride?: string) => {
+    const query = queryOverride ?? searchValue
+    const trimmed = query.trim()
+    if (trimmed) {
+      setRecentSearches(prev => {
+        const next = [trimmed, ...prev.filter(s => s !== trimmed)].slice(0, 10)
+        try { localStorage.setItem('pharmnet-recent-searches', JSON.stringify(next)) } catch {}
+        return next
+      })
+    }
     const gen = ++searchGenRef.current  // invalidate any in-flight loadDetails from prior search
     setDetailsLoading(false)
     setIsLoading(true)
@@ -542,11 +580,11 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     }, 1000)
     try {
       const hasFacilityFilter = selectedFacs.length < allFacilities.length
-      const isWildcard = searchValue.includes('*')
-      const useParallel = !hasFacilityFilter && !isWildcard && activeFields.size > 0 && searchValue.trim().length > 0
+      const isWildcard = query.includes('*')
+      const useParallel = !hasFacilityFilter && !isWildcard && activeFields.size > 0 && trimmed.length > 0
 
       // Base params shared by both paths
-      const baseParams = new URLSearchParams({ q: searchValue, limit: String(maxResults) })
+      const baseParams = new URLSearchParams({ q: query, limit: String(maxResults) })
       if (hasFacilityFilter) baseParams.set("facilities", selectedFacs.join(","))
       if (!showInactive) baseParams.set("showInactive", "false")
       if (scope.type === 'domain') { baseParams.set('region', scope.region); baseParams.set('environment', scope.env) }
@@ -554,7 +592,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
       else if (scope.type === 'env') baseParams.set('environment', scope.env)
 
       // For parallel path, classify which fields to actually query based on input format
-      const fieldsToQuery = useParallel ? classifyActiveFields(searchValue, activeFields) : new Set<string>()
+      const fieldsToQuery = useParallel ? classifyActiveFields(query, activeFields) : new Set<string>()
 
       if (useParallel) {
         // ── Parallel path: one fetch per field, results trickle in as each resolves ──
@@ -664,10 +702,13 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
     }
   }
 
-  // Auto-kick search when modal opens with a pre-filled value
+  // Respond to search queries pushed from the toolbar
   useEffect(() => {
-    if (initialSearchValue.trim()) handleSearch()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!searchTrigger) return
+    setSearchValue(searchTrigger.value)
+    handleSearch(searchTrigger.value)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTrigger?.seq])
 
   const handleExpandSearch = async () => {
     setIsExpanding(true)
@@ -897,7 +938,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
 
   return (
     <>
-    <div className="fixed inset-0 z-50 pointer-events-auto overflow-hidden">
+    <div className="fixed inset-0 z-50 pointer-events-auto overflow-hidden" style={{ display: hidden ? 'none' : undefined }}>
       {/* Dimmed background overlay */}
       <div className="absolute inset-0" />
 
@@ -1043,20 +1084,41 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
               {/* Search Bar */}
               <div className="flex items-center gap-2 mt-1 shrink-0 px-1">
                 <span className="text-xs">Search for:</span>
-                <Input
-                  value={searchValue}
-                  onChange={e => setSearchValue(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === "Enter") {
-                      if (selectedResultIdx !== null) {
-                        handleOk()
-                      } else {
-                        handleSearch()
+                <div className="flex items-center">
+                  <Input
+                    value={searchValue}
+                    onChange={e => setSearchValue(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Escape") { setSearchValue(""); return }
+                      if (e.key === "Enter") {
+                        if (selectedResultIdx !== null) {
+                          handleOk()
+                        } else {
+                          handleSearch()
+                        }
                       }
-                    }
-                  }}
-                  className="h-5 text-xs font-sans rounded-none border-t-[#808080] border-l-[#808080] border-b-white border-r-white border px-1 py-0 w-64 bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus-visible:ring-0 focus-visible:ring-offset-0"
-                />
+                    }}
+                    className="h-5 text-xs font-sans rounded-none border-t-[#808080] border-l-[#808080] border-b-white border-r-white border px-1 py-0 w-64 bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus-visible:ring-0 focus-visible:ring-offset-0"
+                  />
+                  {searchValue && (
+                    <button
+                      onClick={() => setSearchValue("")}
+                      className="h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default"
+                      title="Clear search (Esc)"
+                      tabIndex={-1}
+                    >
+                      ✕
+                    </button>
+                  )}
+                  <RecentSearchDropdown
+                    recentSearches={recentSearches}
+                    onSelect={s => { setSearchValue(s); handleSearch(s) }}
+                    onClear={() => {
+                      setRecentSearches([])
+                      try { localStorage.removeItem('pharmnet-recent-searches') } catch {}
+                    }}
+                  />
+                </div>
                 <span className="text-xs text-[#808080]">in:</span>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -1093,7 +1155,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <button
-                  onClick={handleSearch}
+                  onClick={() => handleSearch()}
                   className="h-6 px-4 border border-[#808080] text-black bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] active:border-t-black active:border-l-black flex items-center justify-center text-xs ml-auto shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
                 >
                   Search
@@ -1284,7 +1346,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                   </thead>
                   <tbody>
                     {results.length === 0 && !isLoading ? (
-                      <tr>
+                      <tr key="empty">
                         <td colSpan={cols.length + 1} className="px-2 py-1 text-center text-[#808080]">
                           {queryMs !== null ? "No results found." : "Enter a search term and click Search."}
                         </td>
@@ -1299,6 +1361,50 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                         const parentDiffCols = isUnified
                           ? computeDiffCols((variantsByGroup.get(getSemanticKey(r)) ?? []).filter(isProd))
                           : new Set<string>()
+
+                        // Build DomainValue[] for a specific field from prod variants
+                        const buildFieldDomainValues = (colId: string): DomainValue[] => {
+                          const prodVariants = (variantsByGroup.get(getSemanticKey(r)) ?? []).filter(isProd)
+                          return prodVariants.map(v => {
+                            const { bg, text } = getDomainColor(v.region, v.environment)
+                            return {
+                              domain: getDomainKey(v),
+                              badge: getDomainBadge(v.region, v.environment),
+                              bg, text,
+                              value: getFieldValue(v, colId),
+                            }
+                          })
+                        }
+
+                        // Wrap cell content with a hoverable ⚑ task button when the column differs
+                        const cellWithTask = (colId: string, content: React.ReactNode) => {
+                          if (!onCreateTask || !parentDiffCols.has(colId)) {
+                            return <span className="truncate block">{content}</span>
+                          }
+                          return (
+                            <div className="flex items-center gap-0.5 group/cell min-w-0">
+                              <span className="truncate min-w-0 flex-1">{content}</span>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  onCreateTask(
+                                    r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId,
+                                    r.description,
+                                    colId,
+                                    FIELD_LABELS[colId] ?? colId,
+                                    buildFieldDomainValues(colId),
+                                  )
+                                }}
+                                className={`opacity-0 group-hover/cell:opacity-100 shrink-0 text-[7px] h-3.5 px-0.5 leading-none transition-opacity
+                                  ${isSelected ? 'bg-white/20 text-white border border-white/30' : 'bg-[#1a4a9a] text-white'}`}
+                                title={`Flag ${FIELD_LABELS[colId] ?? colId} for standardization`}
+                              >
+                                ⚑
+                              </button>
+                            </div>
+                          )
+                        }
+
                         const parentRow = (
                           <tr
                             key={`${r.groupId}-${idx}`}
@@ -1323,19 +1429,37 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                 : "bg-[#F8F8F8] hover:bg-[#F0F8FF]"
                             }`}
                           >
-                            <td className="px-1 py-0 text-center w-5 shrink-0">
-                              {isUnified && (variantsByGroup.get(getSemanticKey(r))?.length ?? 0) > 1 ? (
-                                <button
-                                  onClick={e => toggleExpand(getSemanticKey(r), e)}
-                                  className={`text-[10px] font-bold leading-none w-4 h-4 flex items-center justify-center rounded
-                                    ${isSelected ? 'text-white/80 hover:bg-white/20' : 'text-[#316AC5] hover:bg-[#E0EAFF]'}`}
-                                  title={expandedGroups.has(getSemanticKey(r)) ? 'Collapse domains' : 'Expand domains'}
-                                >
-                                  {expandedGroups.has(getSemanticKey(r)) ? '−' : '+'}
-                                </button>
-                              ) : (
-                                <span className="text-[10px] text-gray-400">▦</span>
-                              )}
+                            <td className="px-0.5 py-0 text-center shrink-0">
+                              <div className="flex items-center justify-center gap-0.5">
+                                {isUnified && (variantsByGroup.get(getSemanticKey(r))?.length ?? 0) > 1 ? (
+                                  <button
+                                    onClick={e => toggleExpand(getSemanticKey(r), e)}
+                                    className={`text-[10px] font-bold leading-none w-4 h-4 flex items-center justify-center rounded
+                                      ${isSelected ? 'text-white/80 hover:bg-white/20' : 'text-[#316AC5] hover:bg-[#E0EAFF]'}`}
+                                    title={expandedGroups.has(getSemanticKey(r)) ? 'Collapse domains' : 'Expand domains'}
+                                  >
+                                    {expandedGroups.has(getSemanticKey(r)) ? '−' : '+'}
+                                  </button>
+                                ) : (
+                                  <span className="text-[10px] text-gray-400">▦</span>
+                                )}
+                                {onCreateTask && parentDiffCols.size > 0 && (
+                                  <button
+                                    onClick={e => {
+                                      e.stopPropagation()
+                                      onCreateTask(
+                                        r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId,
+                                        r.description,
+                                      )
+                                    }}
+                                    className={`text-[8px] font-mono h-4 px-0.5 leading-none border rounded-none whitespace-nowrap
+                                      ${isSelected ? 'bg-white/20 text-white border-white/30 hover:bg-white/30' : 'bg-[#1a4a9a] text-white hover:bg-[#0e3070] border-[#0e3070]'}`}
+                                    title="Create task for this drug"
+                                  >
+                                    ⚑
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             {cols.map(col => {
                               const pDiff = !isSelected && parentDiffCols.has(col.id)
@@ -1436,19 +1560,31 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                                   return (
                                     <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>
                                       {r.chargeNumber && (
-                                        <span className="flex items-center gap-1.5">
-                                          <div className={`w-2 h-2 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`}></div>
-                                          {r.chargeNumber}
-                                        </span>
+                                        pDiff && onCreateTask
+                                          ? <div className="flex items-center gap-0.5 group/cell min-w-0">
+                                              <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                                                <div className={`w-2 h-2 shrink-0 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`} />
+                                                <span className="truncate">{r.chargeNumber}</span>
+                                              </span>
+                                              <button
+                                                onClick={e => { e.stopPropagation(); onCreateTask(r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId, r.description, 'charge', 'Charge Number', buildFieldDomainValues('charge')) }}
+                                                className={`opacity-0 group-hover/cell:opacity-100 shrink-0 text-[7px] h-3.5 px-0.5 leading-none transition-opacity ${isSelected ? 'bg-white/20 text-white border border-white/30' : 'bg-[#1a4a9a] text-white'}`}
+                                                title="Flag Charge Number for standardization"
+                                              >⚑</button>
+                                            </div>
+                                          : <span className="flex items-center gap-1.5">
+                                              <div className={`w-2 h-2 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`} />
+                                              {r.chargeNumber}
+                                            </span>
                                       )}
                                     </td>
                                   )
-                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.pyxisId}</td>
-                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.mnemonic}</td>
-                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.genericName}</td>
-                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{strengthForm}</td>
-                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.description}</td>
-                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden truncate" style={{ ...pDiffStyle, textAlign: col.align }}>{r.brandName}</td>
+                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('pyxis', r.pyxisId)}</td>
+                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('mnemonic', r.mnemonic)}</td>
+                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('generic', r.genericName)}</td>
+                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('strength', strengthForm)}</td>
+                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('description', r.description)}</td>
+                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('brand', r.brandName)}</td>
                                 default:            return <td key={col.id} />
                               }
                             })}
@@ -1584,7 +1720,7 @@ export function SearchModal({ onClose, initialSearchValue = "", scope: initialSc
                               })
                             })()
                           : null
-                        return childRows ? <>{parentRow}{childRows}</> : parentRow
+                        return childRows ? <Fragment key={`${r.groupId}-${idx}-group`}>{parentRow}{childRows}</Fragment> : parentRow
                       })
                     )}
                   </tbody>

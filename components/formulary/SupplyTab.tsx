@@ -12,13 +12,14 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { FormularyItem, SupplyRecord } from "@/lib/types"
-import type { FieldValueMap, DomainRecord } from "@/lib/formulary-diff"
+import type { FieldValueMap, DomainRecord, DomainValue } from "@/lib/formulary-diff"
 
 interface SupplyTabProps {
   item: FormularyItem | null
   highlightedFields?: Set<string>
   fieldValueMap?: FieldValueMap
   domainRecords?: DomainRecord[]
+  onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void
 }
 
 function charDiff(base: string, cmp: string): Array<{ text: string; diff: boolean }> {
@@ -36,7 +37,7 @@ function charDiff(base: string, cmp: string): Array<{ text: string; diff: boolea
 }
 
 // Expandable multi-domain view — one row per NDC, expandable when diffs exist
-function SupplyUnionView({ domainRecords }: { domainRecords: DomainRecord[] }) {
+function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: DomainRecord[]; onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void }) {
   const [selectedNdc, setSelectedNdc] = useState<string | null>(null)
   const [expandedNdcs, setExpandedNdcs] = useState<Set<string>>(new Set())
 
@@ -119,18 +120,42 @@ function SupplyUnionView({ domainRecords }: { domainRecords: DomainRecord[] }) {
                   }`}
                   onClick={() => setSelectedNdc(ndc === selectedNdc ? null : ndc)}
                 >
-                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
+                  <TableCell className="h-5 px-0.5 py-0 border-r border-[#D4D0C8] text-center">
                     {isDiff && (
-                      <button
-                        onClick={e => { e.stopPropagation(); toggleExpand(ndc) }}
-                        className={`w-4 h-4 text-[10px] font-bold leading-none flex items-center justify-center border rounded-none
-                          ${isSelected
-                            ? 'border-white text-white hover:bg-white/20'
-                            : 'border-[#808080] bg-[#D4D0C8] text-[#316AC5] hover:bg-[#C0BBB0]'
-                          }`}
-                      >
-                        {isExpanded ? '−' : '+'}
-                      </button>
+                      <div className="flex items-center justify-center gap-0.5">
+                        <button
+                          onClick={e => { e.stopPropagation(); toggleExpand(ndc) }}
+                          className={`w-4 h-4 text-[10px] font-bold leading-none flex items-center justify-center border rounded-none
+                            ${isSelected
+                              ? 'border-white text-white hover:bg-white/20'
+                              : 'border-[#808080] bg-[#D4D0C8] text-[#316AC5] hover:bg-[#C0BBB0]'
+                            }`}
+                        >
+                          {isExpanded ? '−' : '+'}
+                        </button>
+                        {onCreateTask && (
+                          <button
+                            onClick={e => {
+                              e.stopPropagation()
+                              const domainValues: DomainValue[] = loadedDomains.map(dr => {
+                                const rec = domainData.get(dr.domain)
+                                return {
+                                  domain: dr.domain,
+                                  badge: dr.badge,
+                                  bg: dr.bg,
+                                  text: dr.text,
+                                  value: rec ? (rec.manufacturerLabelDescription || rec.manufacturer || '') : '',
+                                }
+                              })
+                              onCreateTask(`supply.${ndc}`, `NDC ${ndc}`, domainValues)
+                            }}
+                            className="text-[8px] font-mono h-4 px-0.5 leading-none border rounded-none bg-[#1a4a9a] text-white hover:bg-[#0e3070] border-[#0e3070] whitespace-nowrap"
+                            title={`Create task for NDC ${ndc}`}
+                          >
+                            ⚑
+                          </button>
+                        )}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
@@ -205,13 +230,13 @@ function SupplyUnionView({ domainRecords }: { domainRecords: DomainRecord[] }) {
   )
 }
 
-export function SupplyTab({ item, highlightedFields, domainRecords }: SupplyTabProps) {
+export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask }: SupplyTabProps) {
   const [selectedNdc, setSelectedNdc] = useState<string | null>(null)
 
   // Use union view when 2+ domains have data
   const loadedDomains = domainRecords?.filter(dr => dr.item !== null) ?? []
   if (domainRecords && loadedDomains.length >= 2) {
-    return <SupplyUnionView domainRecords={domainRecords} />
+    return <SupplyUnionView domainRecords={domainRecords} onCreateTask={onCreateTask} />
   }
 
   // Single-domain view (original)

@@ -3,9 +3,10 @@ import { getFormularyItemsForKey } from "@/lib/db"
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const pyxisId      = searchParams.get("pyxisId")      ?? undefined
-  const chargeNumber = searchParams.get("chargeNumber") ?? undefined
-  const groupId      = searchParams.get("groupId")      ?? ""
-  const items = await getFormularyItemsForKey({ pyxisId, chargeNumber, groupId })
+  const pyxisId        = searchParams.get("pyxisId")        ?? undefined
+  const chargeNumber   = searchParams.get("chargeNumber")   ?? undefined
+  const groupId        = searchParams.get("groupId")        ?? ""
+  const showRawExtract = searchParams.get("showRawExtract") === "true"
+  const items = await getFormularyItemsForKey({ pyxisId, chargeNumber, groupId }, showRawExtract)
   return NextResponse.json({ items })
 }

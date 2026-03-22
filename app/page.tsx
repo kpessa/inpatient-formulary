@@ -12,6 +12,9 @@ import { FormularyHeader } from "@/components/formulary/FormularyHeader"
 import { SearchModal } from "@/components/formulary/SearchModal"
 import { ImportModal } from "@/components/formulary/ImportModal"
 import { RecentSearchDropdown } from "@/components/formulary/RecentSearchDropdown"
+import { TaskPanel } from "@/components/formulary/TaskPanel"
+import { TaskCreateDialog } from "@/components/formulary/TaskCreateDialog"
+import { BuildChecklist } from "@/components/formulary/BuildChecklist"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +32,7 @@ import {
   buildDomainRecords,
   REGION_ORDER,
 } from "@/lib/formulary-diff"
-import type { FieldValueMap, DomainRecord } from "@/lib/formulary-diff"
+import type { FieldValueMap, DomainRecord, DomainValue } from "@/lib/formulary-diff"
 
 type Scope =
   | { type: 'all' }
@@ -72,12 +75,21 @@ function ToolbarIcon({ children }: { children: React.ReactNode }) {
   )
 }
 
+interface TaskCreateContext {
+  fieldName: string
+  fieldLabel: string
+  domainValues: DomainValue[]
+  drugKey?: string
+  drugDescription?: string
+}
+
 export default function PharmNetFormulary() {
   const [activeTab, setActiveTab] = useState<TabId>("oe-defaults")
   const [searchValue, setSearchValue] = useState("")
   const [recentSearches, setRecentSearches] = useState<string[]>([])
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
+  const [isBuildOpen, setIsBuildOpen] = useState(false)
   const [selectedItemPreview, setSelectedItemPreview] = useState<FormularyItem | null>(null)
   const [domainItems, setDomainItems] = useState<Record<string, FormularyItem | null>>({})
   const [domainLoading, setDomainLoading] = useState<Record<string, boolean>>({})
@@ -87,6 +99,13 @@ export default function PharmNetFormulary() {
   const [scope, setScope] = useState<Scope>({ type: 'all' })
   const [availableDomains, setAvailableDomains] = useState<{ region: string; env: string; domain: string }[]>([])
   const [searchTrigger, setSearchTrigger] = useState<{ value: string; seq: number } | null>(null)
+
+  // Task system state
+  const [showRawExtract, setShowRawExtract] = useState(false)
+  const [isTaskPanelOpen, setIsTaskPanelOpen] = useState(false)
+  const [pendingTaskCount, setPendingTaskCount] = useState(0)
+  const [taskCreateContext, setTaskCreateContext] = useState<TaskCreateContext | null>(null)
+  const currentFetchParamsRef = useRef<{ groupId: string; pyxisId?: string; chargeNumber?: string } | null>(null)
 
   useEffect(() => {
     const updateTime = () => {
@@ -110,7 +129,66 @@ export default function PharmNetFormulary() {
     try { setRecentSearches(JSON.parse(localStorage.getItem('pharmnet-recent-searches') ?? '[]')) } catch {}
   }, [])
 
+  // ---------------------------------------------------------------------------
+  // Domain item fetch (extracted for re-use on toggle/refresh)
+  // ---------------------------------------------------------------------------
+  const doFetchDomainItems = (
+    params: { groupId: string; pyxisId?: string; chargeNumber?: string },
+    rawExtract: boolean,
+    available: string[],
+    keepBaseDomain?: string | null,
+  ) => {
+    const initialLoading: Record<string, boolean> = {}
+    available.forEach(dk => { initialLoading[dk] = true })
+    setDomainLoading(initialLoading)
+
+    const searchParams = new URLSearchParams({ groupId: params.groupId })
+    if (params.pyxisId)      searchParams.set('pyxisId', params.pyxisId)
+    if (params.chargeNumber) searchParams.set('chargeNumber', params.chargeNumber)
+    if (rawExtract)          searchParams.set('showRawExtract', 'true')
+
+    fetch(`/api/formulary/items?${searchParams}`)
+      .then(r => r.json())
+      .then((data: { items: Record<string, FormularyItem> }) => {
+        const newItems: Record<string, FormularyItem | null> = {}
+        available.forEach(dk => { newItems[dk] = data.items[dk] ?? null })
+        setDomainItems(newItems)
+        if (keepBaseDomain == null) {
+          const firstLoaded = available.find(dk => data.items[dk])
+          if (firstLoaded) setBaseDomain(firstLoaded)
+        }
+      })
+      .catch(() => {
+        const nullItems: Record<string, FormularyItem | null> = {}
+        available.forEach(dk => { nullItems[dk] = null })
+        setDomainItems(nullItems)
+      })
+      .finally(() => {
+        const doneLoading: Record<string, boolean> = {}
+        available.forEach(dk => { doneLoading[dk] = false })
+        setDomainLoading(doneLoading)
+      })
+  }
+
+  const refreshDomainItems = () => {
+    if (!currentFetchParamsRef.current) return
+    const available = availableDomains.filter(d => d.env === 'prod').map(d => d.domain)
+    if (available.length === 0) return
+    doFetchDomainItems(currentFetchParamsRef.current, showRawExtract, available, baseDomain)
+  }
+
+  const handleToggleExtract = () => {
+    const newValue = !showRawExtract
+    setShowRawExtract(newValue)
+    if (currentFetchParamsRef.current) {
+      const available = availableDomains.filter(d => d.env === 'prod').map(d => d.domain)
+      doFetchDomainItems(currentFetchParamsRef.current, newValue, available, baseDomain)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Derived diff values — prod domains sorted west → central → east
+  // ---------------------------------------------------------------------------
   const prodDomains = availableDomains
     .filter(d => d.env === 'prod')
     .sort((a, b) => REGION_ORDER.indexOf(a.region as typeof REGION_ORDER[number]) - REGION_ORDER.indexOf(b.region as typeof REGION_ORDER[number]))
@@ -130,6 +208,13 @@ export default function PharmNetFormulary() {
     .filter(t => t.id !== 'inventory')
     .reduce((n, t) => n + computeTabDiffs(domainItemsList, t.id).count, 0)
 
+  // Current drug key for task system (pyxisId > chargeNumber > groupId)
+  const currentDrugKey =
+    selectedItem?.identifiers?.pyxisId?.trim() ||
+    selectedItem?.identifiers?.chargeNumber?.trim() ||
+    selectedItem?.groupId ||
+    null
+
   const [rect, setRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null)
   const isResizing = useRef<{ dir: string, startX: number, startY: number, startRect: { x: number, y: number, w: number, h: number } } | null>(null)
 
@@ -148,17 +233,17 @@ export default function PharmNetFormulary() {
       const { dir, startX, startY, startRect } = isResizing.current
       const dx = e.clientX - startX
       const dy = e.clientY - startY
-      
+
       if (dir === 'move') {
         setRect({ ...startRect, x: startRect.x + dx, y: startRect.y + dy })
         return
       }
-      
+
       let newW = startRect.w
       let newH = startRect.h
       let newX = startRect.x
       let newY = startRect.y
-      
+
       if (dir.includes('e')) newW = Math.max(500, startRect.w + dx)
       if (dir.includes('w')) {
         const potentialW = Math.max(500, startRect.w - dx)
@@ -171,7 +256,7 @@ export default function PharmNetFormulary() {
         newY = startRect.y + (startRect.h - potentialH)
         newH = potentialH
       }
-      
+
       setRect({ x: newX, y: newY, w: newW, h: newH })
     }
     const handlePointerUp = () => {
@@ -179,7 +264,7 @@ export default function PharmNetFormulary() {
         isResizing.current = null
       }
     }
-    
+
     window.addEventListener('pointermove', handlePointerMove)
     window.addEventListener('pointerup', handlePointerUp)
     return () => {
@@ -187,14 +272,12 @@ export default function PharmNetFormulary() {
       window.removeEventListener('pointerup', handlePointerUp)
     }
   }, [])
-  
+
   const handlePointerDown = (dir: string) => (e: React.PointerEvent) => {
     if (!rect) return
     e.preventDefault()
     e.stopPropagation()
     isResizing.current = { dir, startX: e.clientX, startY: e.clientY, startRect: rect }
-    const target = e.target as HTMLElement
-    // We let the window pointermove handle tracking
   }
 
   const openSearch = (query?: string) => {
@@ -208,6 +291,14 @@ export default function PharmNetFormulary() {
       })
       setSearchTrigger(prev => ({ value: trimmed, seq: (prev?.seq ?? 0) + 1 }))
     }
+  }
+
+  const handleCreateTask = (fieldName: string, fieldLabel: string, values: DomainValue[]) => {
+    setTaskCreateContext({ fieldName, fieldLabel, domainValues: values })
+  }
+
+  const handleCreateTaskFromSearch = (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[]) => {
+    setTaskCreateContext({ fieldName: fieldName ?? '', fieldLabel: fieldLabel ?? '', domainValues: domainValues ?? [], drugKey, drugDescription })
   }
 
   if (!rect) {
@@ -231,7 +322,7 @@ export default function PharmNetFormulary() {
         <div onPointerDown={handlePointerDown('se')} className="absolute bottom-0 right-0 w-2 h-2 cursor-se-resize z-20" />
 
         {/* Title bar */}
-        <div 
+        <div
           className="flex items-center justify-between bg-[#C85A00] text-white px-2 h-7 shrink-0 cursor-default"
           onPointerDown={handlePointerDown('move')}
         >
@@ -264,6 +355,13 @@ export default function PharmNetFormulary() {
               onSelect={() => setIsImportModalOpen(true)}
             >
               Import CSV Extract...
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-[#808080]" />
+            <DropdownMenuItem
+              className="rounded-none px-4 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white"
+              onSelect={() => setIsBuildOpen(true)}
+            >
+              New Product Build...
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -344,7 +442,12 @@ export default function PharmNetFormulary() {
       </div>
 
       {/* Global fields area */}
-      <FormularyHeader item={selectedItem} highlightedFields={headerDiffs} fieldValueMap={fieldValueMap} />
+      <FormularyHeader
+        item={selectedItem}
+        highlightedFields={headerDiffs}
+        fieldValueMap={fieldValueMap}
+        onCreateTask={currentDrugKey ? handleCreateTask : undefined}
+      />
 
       {/* Domain status bar */}
       {prodDomains.length > 1 && selectedItemPreview && (
@@ -381,7 +484,48 @@ export default function PharmNetFormulary() {
               ? 'Loading domains…'
               : totalDiffs === 0 ? 'All domains match' : `${totalDiffs} field${totalDiffs !== 1 ? 's' : ''} differ`}
           </span>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Extract / Confirmed toggle */}
+          <div className="inline-flex border border-[#808080] overflow-hidden shrink-0">
+            <button
+              onClick={() => !showRawExtract && handleToggleExtract()}
+              className={`text-[9px] font-mono px-1.5 h-[18px] leading-none ${showRawExtract ? 'bg-[#316AC5] text-white' : 'bg-[#D4D0C8] text-[#404040]'}`}
+            >
+              Extract
+            </button>
+            <button
+              onClick={() => showRawExtract && handleToggleExtract()}
+              className={`text-[9px] font-mono px-1.5 h-[18px] leading-none border-l border-[#808080] ${!showRawExtract ? 'bg-[#316AC5] text-white' : 'bg-[#D4D0C8] text-[#404040]'}`}
+            >
+              Confirmed
+            </button>
+          </div>
+
+          {/* Tasks button */}
+          {currentDrugKey && (
+            <button
+              onClick={() => setIsTaskPanelOpen(v => !v)}
+              className={`text-[9px] font-mono px-1.5 h-[18px] border border-[#808080] shrink-0 ${isTaskPanelOpen ? 'bg-[#316AC5] text-white' : 'bg-[#D4D0C8] text-[#404040] hover:bg-[#C8C4BC]'}`}
+            >
+              Tasks{pendingTaskCount > 0 ? ` (${pendingTaskCount})` : ''}
+            </button>
+          )}
         </div>
+      )}
+
+      {/* Task panel */}
+      {isTaskPanelOpen && currentDrugKey && selectedItem && (
+        <TaskPanel
+          drugKey={currentDrugKey}
+          drugDescription={selectedItem.description}
+          groupId={selectedItem.groupId}
+          onTaskCountChange={setPendingTaskCount}
+          onCreateTask={() => setTaskCreateContext({ fieldName: '', fieldLabel: '', domainValues: [] })}
+          onOverrideApplied={refreshDomainItems}
+        />
       )}
 
       {/* Tabs */}
@@ -417,8 +561,8 @@ export default function PharmNetFormulary() {
         {activeTab === "dispense" && <DispenseTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'dispense').fields} fieldValueMap={fieldValueMap} />}
         {activeTab === "inventory" && <InventoryTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'inventory').fields} fieldValueMap={fieldValueMap} />}
         {activeTab === "clinical" && <ClinicalTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'clinical').fields} fieldValueMap={fieldValueMap} />}
-        {activeTab === "supply" && <SupplyTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'supply').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} />}
-        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'identifiers').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} />}
+        {activeTab === "supply" && <SupplyTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'supply').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={currentDrugKey ? handleCreateTask : undefined} />}
+        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'identifiers').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={currentDrugKey ? handleCreateTask : undefined} />}
         {activeTab === "tpn-details" && (
           <div className="p-4 text-xs font-mono text-[#808080]">TPN Details tab content</div>
         )}
@@ -470,54 +614,61 @@ export default function PharmNetFormulary() {
           <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{timeStr}</span>
         </div>
       </div>
+
       <SearchModal
         hidden={!isSearchModalOpen}
         searchTrigger={searchTrigger}
         scope={scope}
         availableDomains={availableDomains}
         onClose={() => setIsSearchModalOpen(false)}
+        onCreateTask={handleCreateTaskFromSearch}
         onSelect={(item) => {
           setSelectedItemPreview(item)
           setIsSearchModalOpen(false)
+          setPendingTaskCount(0)
+          setIsTaskPanelOpen(false)
 
           const available = availableDomains.filter(d => d.env === 'prod').map(d => d.domain)
           if (available.length <= 1) return
 
-          const initialLoading: Record<string, boolean> = {}
-          available.forEach(dk => { initialLoading[dk] = true })
-          setDomainLoading(initialLoading)
-          setDomainItems({})
-          setBaseDomain(null)
-
           const pyxisId      = item.identifiers?.pyxisId?.trim()      || undefined
           const chargeNumber = item.identifiers?.chargeNumber?.trim() || undefined
-          const params = new URLSearchParams({ groupId: item.groupId })
-          if (pyxisId)      params.set('pyxisId', pyxisId)
-          if (chargeNumber) params.set('chargeNumber', chargeNumber)
+          const fetchParams = { groupId: item.groupId, pyxisId, chargeNumber }
+          currentFetchParamsRef.current = fetchParams
 
-          fetch(`/api/formulary/items?${params}`)
-            .then(r => r.json())
-            .then((data: { items: Record<string, FormularyItem> }) => {
-              const newItems: Record<string, FormularyItem | null> = {}
-              available.forEach(dk => { newItems[dk] = data.items[dk] ?? null })
-              setDomainItems(newItems)
-              const firstLoaded = available.find(dk => data.items[dk])
-              if (firstLoaded) setBaseDomain(firstLoaded)
-            })
-            .catch(() => {
-              const nullItems: Record<string, FormularyItem | null> = {}
-              available.forEach(dk => { nullItems[dk] = null })
-              setDomainItems(nullItems)
-            })
-            .finally(() => {
-              const doneLoading: Record<string, boolean> = {}
-              available.forEach(dk => { doneLoading[dk] = false })
-              setDomainLoading(doneLoading)
-            })
+          setDomainItems({})
+          setBaseDomain(null)
+          doFetchDomainItems(fetchParams, showRawExtract, available)
         }}
       />
+
       {isImportModalOpen && (
         <ImportModal onClose={() => setIsImportModalOpen(false)} />
+      )}
+
+      {/* Task create dialog */}
+      {taskCreateContext !== null && (taskCreateContext.drugKey || currentDrugKey) && (
+        <TaskCreateDialog
+          drugKey={taskCreateContext.drugKey ?? currentDrugKey ?? ''}
+          drugDescription={taskCreateContext.drugDescription ?? selectedItem?.description ?? ''}
+          fieldName={taskCreateContext.fieldName || undefined}
+          fieldLabel={taskCreateContext.fieldLabel || undefined}
+          domainValues={taskCreateContext.domainValues.length > 0 ? taskCreateContext.domainValues : undefined}
+          availableDomains={prodDomains}
+          onClose={() => setTaskCreateContext(null)}
+          onCreated={() => {
+            setTaskCreateContext(null)
+            setIsTaskPanelOpen(true)
+          }}
+        />
+      )}
+
+      {/* Build checklist */}
+      {isBuildOpen && (
+        <BuildChecklist
+          availableDomains={availableDomains}
+          onClose={() => setIsBuildOpen(false)}
+        />
       )}
     </div>
     </div>

@@ -1,8 +1,11 @@
 "use client"
 
+import React from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import type { FormularyItem } from "@/lib/types"
+import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import type { FieldValueMap } from "@/lib/formulary-diff"
 
 const nonFloorstock = [
   "CHR MedKeeper", "GWU MedKeeper", "LWR MedKeeper", "MMH MedKeeper",
@@ -30,23 +33,28 @@ const floorstockLocations = [
 
 interface InventoryTabProps {
   item: FormularyItem | null
+  highlightedFields?: Set<string>
+  fieldValueMap?: FieldValueMap
 }
 
-export function InventoryTab({ item }: InventoryTabProps) {
+export function InventoryTab({ item, highlightedFields, fieldValueMap }: InventoryTabProps) {
   const inv = item?.inventory
   const facilities = inv
     ? Object.entries(inv.facilities).filter(([, v]) => v).map(([k]) => k)
     : []
 
   const dispenseFrom = inv?.dispenseFrom ?? ""
+  const hl = (key: string): React.CSSProperties => highlightedFields?.has(key) ? { background: '#FFF3CD', borderRadius: '2px' } : {}
 
   return (
     <div className="p-3 text-xs font-mono flex flex-col gap-3 h-full">
       {/* Column headers */}
       <div className="grid grid-cols-[1fr_1fr_1fr_180px] gap-3">
-        <div className="text-xs font-mono pr-2">
-          <span className="text-[#CC0000]">*</span> Orderable in the following<br />facilities:
-        </div>
+        <FieldDiffTooltip values={fieldValueMap?.['facilities']} style={hl('facilities')}>
+          <div className="text-xs font-mono pr-2">
+            <span className="text-[#CC0000]">*</span> Orderable in the following<br />facilities:
+          </div>
+        </FieldDiffTooltip>
         <div className="text-xs font-mono pr-2">
           Stocked in the following non-<br />floorstock locations:
         </div>
@@ -59,7 +67,7 @@ export function InventoryTab({ item }: InventoryTabProps) {
       {/* Four-column layout with lists and buttons */}
       <div className="grid grid-cols-[1fr_1fr_1fr_180px] gap-3 flex-1 min-h-0 mt-1">
         {/* Column 1: Facilities */}
-        <div className="flex flex-col gap-2 min-h-0">
+        <FieldDiffTooltip values={fieldValueMap?.['facilities']} style={hl('facilities')} className="flex flex-col gap-2 min-h-0">
           <div className="border border-[#808080] bg-white overflow-y-auto flex-1">
             {facilities.map((f) => (
               <div
@@ -78,7 +86,7 @@ export function InventoryTab({ item }: InventoryTabProps) {
               Flex by Fac.
             </Button>
           </div>
-        </div>
+        </FieldDiffTooltip>
 
         {/* Column 2: Non-floorstock */}
         <div className="flex flex-col gap-2 min-h-0">
@@ -123,49 +131,53 @@ export function InventoryTab({ item }: InventoryTabProps) {
 
         {/* Column 4: Dispense from + checkboxes */}
         <div className="flex flex-col gap-2 min-h-0">
-          <fieldset className="border border-[#808080] rounded-md p-1.5 pt-0.5 text-xs font-mono">
-            <legend className="text-xs font-mono px-1 ml-1 text-black font-semibold">Dispense from</legend>
-            <div className="space-y-1 mt-1">
-              <div className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  name="dispense"
-                  checked={dispenseFrom === "Check location list" || dispenseFrom === ""}
-                  readOnly
-                  className="w-3 h-3"
-                />
-                <span className="text-xs font-mono">Check location list</span>
+          <FieldDiffTooltip values={fieldValueMap?.['dispenseFrom']} style={hl('dispenseFrom')}>
+            <fieldset className="border border-[#808080] rounded-md p-1.5 pt-0.5 text-xs font-mono">
+              <legend className="text-xs font-mono px-1 ml-1 text-black font-semibold">Dispense from</legend>
+              <div className="space-y-1 mt-1">
+                <div className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    name="dispense"
+                    checked={dispenseFrom === "Check location list" || dispenseFrom === ""}
+                    readOnly
+                    className="w-3 h-3"
+                  />
+                  <span className="text-xs font-mono">Check location list</span>
+                </div>
+                <div className="flex items-start gap-1">
+                  <input
+                    type="radio"
+                    name="dispense"
+                    checked={dispenseFrom === "Always non-floorstock"}
+                    readOnly
+                    className="w-3 h-3 mt-0.5 shrink-0"
+                  />
+                  <span className="text-xs font-mono leading-tight">Always dispense from non-floorstock location</span>
+                </div>
+                <div className="flex items-start gap-1">
+                  <input
+                    type="radio"
+                    name="dispense"
+                    checked={dispenseFrom === "Always floorstock"}
+                    readOnly
+                    className="w-3 h-3 mt-0.5 shrink-0"
+                  />
+                  <span className="text-xs font-mono leading-tight">Always dispense from floorstock</span>
+                </div>
               </div>
-              <div className="flex items-start gap-1">
-                <input
-                  type="radio"
-                  name="dispense"
-                  checked={dispenseFrom === "Always non-floorstock"}
-                  readOnly
-                  className="w-3 h-3 mt-0.5 shrink-0"
-                />
-                <span className="text-xs font-mono leading-tight">Always dispense from non-floorstock location</span>
-              </div>
-              <div className="flex items-start gap-1">
-                <input
-                  type="radio"
-                  name="dispense"
-                  checked={dispenseFrom === "Always floorstock"}
-                  readOnly
-                  className="w-3 h-3 mt-0.5 shrink-0"
-                />
-                <span className="text-xs font-mono leading-tight">Always dispense from floorstock</span>
-              </div>
-            </div>
-          </fieldset>
+            </fieldset>
+          </FieldDiffTooltip>
           <div className="space-y-1 overflow-y-auto pr-1">
-            <div className="flex items-start gap-1">
-              <Checkbox
-                checked={inv?.isReusable ?? false}
-                className="rounded-none border-[#808080] h-3.5 w-3.5 mt-0.5 shrink-0"
-              />
-              <span className="text-xs font-mono leading-tight">Upon return to pharmacy, this product is reusable.</span>
-            </div>
+            <FieldDiffTooltip values={fieldValueMap?.['isReusable']} style={hl('isReusable')}>
+              <div className="flex items-start gap-1">
+                <Checkbox
+                  checked={inv?.isReusable ?? false}
+                  className="rounded-none border-[#808080] h-3.5 w-3.5 mt-0.5 shrink-0"
+                />
+                <span className="text-xs font-mono leading-tight">Upon return to pharmacy, this product is reusable.</span>
+              </div>
+            </FieldDiffTooltip>
             {[
               { label: "Track lot numbers", checked: false },
               { label: "Disable APS/APA", checked: false },

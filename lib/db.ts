@@ -7,7 +7,9 @@ import type {
   InventoryInfo,
   Identifiers,
   SupplyRecord,
+  FieldOverride,
 } from './types'
+import { applyOverrides } from './overlay'
 
 const AUTO_FETCH_MAX = 500
 
@@ -509,11 +511,10 @@ function rowToSupplyRecord(r: Row): SupplyRecord {
   }
 }
 
-export async function getFormularyItemsForKey(key: {
-  pyxisId?: string
-  chargeNumber?: string
-  groupId: string
-}): Promise<Record<string, FormularyItem>> {
+export async function getFormularyItemsForKey(
+  key: { pyxisId?: string; chargeNumber?: string; groupId: string },
+  showRawExtract = false,
+): Promise<Record<string, FormularyItem>> {
   const db = getDb()
 
   let sql: string
@@ -541,11 +542,28 @@ export async function getFormularyItemsForKey(key: {
     )
   )
 
+  // Fetch overrides in one batch when overlay mode is active.
+  // Silently skip if field_overrides table doesn't exist yet (pre-migration).
+  let overrideResults: { rows: Row[] }[] = []
+  if (!showRawExtract) {
+    try {
+      overrideResults = await db.batch(
+        rows.map(g => ({
+          sql: 'SELECT * FROM field_overrides WHERE domain = ? AND group_id = ?',
+          args: [g.domain as string, g.group_id as string],
+        })),
+        'read',
+      )
+    } catch {
+      // table doesn't exist yet — return raw extract data
+    }
+  }
+
   const out: Record<string, FormularyItem> = {}
   for (let i = 0; i < rows.length; i++) {
     const g = rows[i]
     const domain = g.domain as string
-    out[domain] = {
+    let item: FormularyItem = {
       groupId: g.group_id as string,
       description: g.description as string,
       strength: g.strength as string,
@@ -562,13 +580,28 @@ export async function getFormularyItemsForKey(key: {
       identifiers: JSON.parse(g.identifiers_json as string) as Identifiers,
       supplyRecords: supplyResults[i].rows.map(rowToSupplyRecord),
     }
+    if (!showRawExtract && overrideResults[i]?.rows.length) {
+      const overrides = overrideResults[i].rows.map(r => ({
+        id: r.id as string,
+        domain: r.domain as string,
+        groupId: r.group_id as string,
+        fieldPath: r.field_path as string,
+        overrideValue: r.override_value as string,
+        taskId: r.task_id as string | undefined,
+        appliedAt: r.applied_at as string,
+        appliedBy: r.applied_by as string,
+      } satisfies FieldOverride))
+      item = applyOverrides(item, overrides)
+    }
+    out[domain] = item
   }
   return out
 }
 
 export async function getFormularyItem(
   groupId: string,
-  domain?: string
+  domain?: string,
+  showRawExtract = false,
 ): Promise<FormularyItem | null> {
   const db = getDb()
 
@@ -584,6 +617,7 @@ export async function getFormularyItem(
   if (groupRows.length === 0) return null
 
   const g = groupRows[0]
+  const resolvedDomain = g.domain as string
 
   const supplyArgs: string[] = [groupId]
   let supplySql = 'SELECT * FROM supply_records WHERE group_id = ?'
@@ -594,9 +628,7 @@ export async function getFormularyItem(
 
   const { rows: supplyRows } = await db.execute({ sql: supplySql, args: supplyArgs })
 
-  const supplyRecords: SupplyRecord[] = supplyRows.map(rowToSupplyRecord)
-
-  return {
+  let item: FormularyItem = {
     groupId: g.group_id as string,
     description: g.description as string,
     strength: g.strength as string,
@@ -611,6 +643,32 @@ export async function getFormularyItem(
     clinical: JSON.parse(g.clinical_json as string) as ClinicalInfo,
     inventory: JSON.parse(g.inventory_json as string) as InventoryInfo,
     identifiers: JSON.parse(g.identifiers_json as string) as Identifiers,
-    supplyRecords,
+    supplyRecords: supplyRows.map(rowToSupplyRecord),
   }
+
+  if (!showRawExtract) {
+    try {
+      const { rows: overrideRows } = await db.execute({
+        sql: 'SELECT * FROM field_overrides WHERE domain = ? AND group_id = ?',
+        args: [resolvedDomain, item.groupId],
+      })
+      if (overrideRows.length > 0) {
+        const overrides = overrideRows.map(r => ({
+          id: r.id as string,
+          domain: r.domain as string,
+          groupId: r.group_id as string,
+          fieldPath: r.field_path as string,
+          overrideValue: r.override_value as string,
+          taskId: r.task_id as string | undefined,
+          appliedAt: r.applied_at as string,
+          appliedBy: r.applied_by as string,
+        } satisfies FieldOverride))
+        item = applyOverrides(item, overrides)
+      }
+    } catch {
+      // table doesn't exist yet — return raw extract data
+    }
+  }
+
+  return item
 }

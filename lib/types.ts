@@ -249,6 +249,59 @@ export interface Identifiers {
 }
 
 // ---------------------------------------------------------------------------
+// Task tracking
+// ---------------------------------------------------------------------------
+export interface ChangeTask {
+  id: string
+  drugKey: string
+  drugDescription: string
+  type: 'diff' | 'free_form'
+  fieldName?: string
+  fieldLabel?: string
+  targetDomain?: string
+  domainValues?: string  // JSON snapshot: { "west_prod": "val", ... }
+  targetValue?: string
+  status: 'pending' | 'in_progress' | 'done'
+  assignedTo?: string
+  notes?: string
+  createdAt: string
+  updatedAt: string
+  completedAt?: string
+  completedBy?: string
+}
+
+export interface FieldOverride {
+  id: string
+  domain: string
+  groupId: string
+  fieldPath: string        // e.g. 'description', 'oeDefaults.dose'
+  overrideValue: string    // JSON-encoded scalar
+  taskId?: string
+  appliedAt: string
+  appliedBy: string
+}
+
+export interface BuildDomainProgress {
+  buildId: string
+  domain: string
+  status: 'pending' | 'in_progress' | 'done'
+  completedAt?: string
+  completedBy?: string
+  notes?: string
+}
+
+export interface ProductBuild {
+  id: string
+  drugDescription: string
+  drugKey?: string
+  status: 'in_progress' | 'review' | 'complete'
+  notes?: string
+  createdAt: string
+  createdBy?: string
+  domainProgress?: BuildDomainProgress[]
+}
+
+// ---------------------------------------------------------------------------
 // Top-level FormularyItem — one per GROUP_ID
 // ---------------------------------------------------------------------------
 export interface FormularyItem {

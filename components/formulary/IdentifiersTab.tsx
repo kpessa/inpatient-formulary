@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/select"
 import type { FormularyItem } from "@/lib/types"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
-import type { FieldValueMap, DomainRecord } from "@/lib/formulary-diff"
+import type { FieldValueMap, DomainRecord, DomainValue } from "@/lib/formulary-diff"
 
 interface IdentifierRow {
   id: number
@@ -45,6 +45,7 @@ interface IdentifiersTabProps {
   highlightedFields?: Set<string>
   fieldValueMap?: FieldValueMap
   domainRecords?: DomainRecord[]
+  onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void
 }
 
 function buildRows(item: FormularyItem | null): IdentifierRow[] {
@@ -98,7 +99,7 @@ function getIdentifierValue(item: FormularyItem, fieldKey: string): string {
   }
 }
 
-export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainRecords }: IdentifiersTabProps) {
+export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainRecords, onCreateTask }: IdentifiersTabProps) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [showNewDialog, setShowNewDialog] = useState(false)
@@ -192,7 +193,13 @@ export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainR
                   )}
                   <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8]">{row.type}</TableCell>
                   <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8]">
-                    <FieldDiffTooltip values={fieldValueMap?.[row.fieldKey]} className="max-w-[300px] truncate">
+                    <FieldDiffTooltip
+                      values={fieldValueMap?.[row.fieldKey]}
+                      fieldName={row.fieldKey}
+                      fieldLabel={row.type}
+                      onCreateTask={onCreateTask}
+                      className="max-w-[300px] truncate"
+                    >
                       {row.identifier}
                     </FieldDiffTooltip>
                   </TableCell>

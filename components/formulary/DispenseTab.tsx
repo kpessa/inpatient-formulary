@@ -1,5 +1,6 @@
 "use client"
 
+import React from "react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
@@ -12,14 +13,19 @@ import {
 } from "@/components/ui/select"
 import { FormField } from "./FormField"
 import type { FormularyItem } from "@/lib/types"
+import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import type { FieldValueMap } from "@/lib/formulary-diff"
 
 interface DispenseTabProps {
   item: FormularyItem | null
+  highlightedFields?: Set<string>
+  fieldValueMap?: FieldValueMap
 }
 
-export function DispenseTab({ item }: DispenseTabProps) {
+export function DispenseTab({ item, highlightedFields, fieldValueMap }: DispenseTabProps) {
   const d = item?.dispense
   const totalVolCalcValue = d?.usedInTotalVolumeCalculation ? "always" : "never"
+  const hl = (key: string): React.CSSProperties => highlightedFields?.has(key) ? { background: '#FFF3CD', borderRadius: '2px' } : {}
 
   return (
     <div className="p-3 text-xs font-mono w-fit">
@@ -31,7 +37,7 @@ export function DispenseTab({ item }: DispenseTabProps) {
 
           {/* Strength / Volume */}
           <div className="flex gap-4 items-end">
-            <FormField label="Strength:" required>
+            <FieldDiffTooltip values={fieldValueMap?.['strength']} style={hl('strength')}><FormField label="Strength:" required>
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.strength != null ? String(d.strength) : ""}
@@ -44,9 +50,9 @@ export function DispenseTab({ item }: DispenseTabProps) {
                   className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20"
                 />
               </div>
-            </FormField>
+            </FormField></FieldDiffTooltip>
             <span className="text-xs font-mono mb-1">/</span>
-            <FormField label="Volume:" required>
+            <FieldDiffTooltip values={fieldValueMap?.['volume']} style={hl('volume')}><FormField label="Volume:" required>
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.volume != null ? String(d.volume) : ""}
@@ -59,12 +65,12 @@ export function DispenseTab({ item }: DispenseTabProps) {
                   className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20"
                 />
               </div>
-            </FormField>
+            </FormField></FieldDiffTooltip>
           </div>
 
           {/* Dispense quantity / Dispense category */}
           <div className="flex gap-3 items-end">
-            <FormField label="Dispense quantity:">
+            <FieldDiffTooltip values={fieldValueMap?.['dispenseQty']} style={hl('dispenseQty')}><FormField label="Dispense quantity:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.dispenseQty != null ? String(d.dispenseQty) : ""}
@@ -77,8 +83,8 @@ export function DispenseTab({ item }: DispenseTabProps) {
                   className="text-xs font-mono rounded-none border border-[#808080] px-1 w-20"
                 />
               </div>
-            </FormField>
-            <FormField label="Dispense category:">
+            </FormField></FieldDiffTooltip>
+            <FieldDiffTooltip values={fieldValueMap?.['dispenseCategory']} style={hl('dispenseCategory')}><FormField label="Dispense category:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.dispenseCategory ?? ""}
@@ -89,7 +95,7 @@ export function DispenseTab({ item }: DispenseTabProps) {
                   ...
                 </button>
               </div>
-            </FormField>
+            </FormField></FieldDiffTooltip>
           </div>
 
           {/* Dispense factor */}
@@ -138,17 +144,17 @@ export function DispenseTab({ item }: DispenseTabProps) {
           </fieldset>
 
           {/* Formulary status */}
-          <FormField label="Formulary status:" required className="w-full">
+          <FieldDiffTooltip values={fieldValueMap?.['formularyStatus']} style={hl('formularyStatus')}><FormField label="Formulary status:" required className="w-full">
             <Input
               value={d?.formularyStatus ?? ""}
               readOnly
               className="w-full text-xs font-mono rounded-none border border-[#808080] px-1"
             />
-          </FormField>
+          </FormField></FieldDiffTooltip>
 
           {/* Price schedule / Billing factor */}
           <div className="space-y-2 mt-2">
-            <FormField label="Price schedule:">
+            <FieldDiffTooltip values={fieldValueMap?.['priceSchedule']} style={hl('priceSchedule')}><FormField label="Price schedule:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.priceSchedule ?? ""}
@@ -159,8 +165,8 @@ export function DispenseTab({ item }: DispenseTabProps) {
                   Formula...
                 </Button>
               </div>
-            </FormField>
-            <FormField label="Billing factor:">
+            </FormField></FieldDiffTooltip>
+            <FieldDiffTooltip values={fieldValueMap?.['awpFactor']} style={hl('awpFactor')}><FormField label="Billing factor:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.awpFactor != null ? String(d.awpFactor) : ""}
@@ -169,7 +175,7 @@ export function DispenseTab({ item }: DispenseTabProps) {
                 />
                 <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 h-6" />
               </div>
-            </FormField>
+            </FormField></FieldDiffTooltip>
           </div>
 
           {/* CMS billing unit */}

@@ -19,12 +19,15 @@ function charDiff(base: string, cmp: string): Array<{ text: string; diff: boolea
 
 interface Props {
   values?: DomainValue[]
+  fieldName?: string
+  fieldLabel?: string
+  onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void
   style?: React.CSSProperties
   className?: string
   children: React.ReactNode
 }
 
-export function FieldDiffTooltip({ values, style, className, children }: Props) {
+export function FieldDiffTooltip({ values, fieldName, fieldLabel, onCreateTask, style, className, children }: Props) {
   const [show, setShow] = useState(false)
   if (!values?.length) return <div style={style} className={className}>{children}</div>
 
@@ -39,10 +42,22 @@ export function FieldDiffTooltip({ values, style, className, children }: Props) 
     >
       {children}
       {show && (
-        <div className="absolute z-[200] bottom-full left-0 mb-px min-w-[200px] w-max bg-white border border-[#808080] shadow-[2px_2px_0px_#000000] pointer-events-none">
+        <div className="absolute z-[200] bottom-full left-0 mb-px min-w-[200px] w-max bg-white border border-[#808080] shadow-[2px_2px_0px_#000000]">
           {/* Win95 title bar */}
-          <div className="bg-[#316AC5] text-white text-[9px] font-mono font-bold px-1.5 py-0.5 flex items-center gap-1">
+          <div className="bg-[#316AC5] text-white text-[9px] font-mono font-bold px-1.5 py-0.5 flex items-center justify-between gap-2">
             <span>Domain Values</span>
+            {onCreateTask && fieldName && (
+              <button
+                className="text-[9px] font-mono px-1.5 py-0.5 bg-[#1a4a9a] text-white hover:bg-[#0e3070] border border-white/30 leading-none"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShow(false)
+                  onCreateTask(fieldName, fieldLabel ?? fieldName, values)
+                }}
+              >
+                + Task
+              </button>
+            )}
           </div>
           <div className="p-1 space-y-0.5">
             {values.map((dv, i) => {
