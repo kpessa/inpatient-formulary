@@ -2,16 +2,16 @@
 
 import { useState, useEffect, useRef } from "react"
 import { Input } from "@/components/ui/input"
-import { Checkbox } from "@/components/ui/checkbox"
 import { OEDefaultsTab } from "@/components/formulary/OEDefaultsTab"
 import { DispenseTab } from "@/components/formulary/DispenseTab"
 import { InventoryTab } from "@/components/formulary/InventoryTab"
 import { ClinicalTab } from "@/components/formulary/ClinicalTab"
 import { SupplyTab } from "@/components/formulary/SupplyTab"
 import { IdentifiersTab } from "@/components/formulary/IdentifiersTab"
-import { FormField } from "@/components/formulary/FormField"
+import { FormularyHeader } from "@/components/formulary/FormularyHeader"
 import { SearchModal } from "@/components/formulary/SearchModal"
 import { ImportModal } from "@/components/formulary/ImportModal"
+import { RecentSearchDropdown } from "@/components/formulary/RecentSearchDropdown"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +20,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { FormularyItem } from "@/lib/types"
+import {
+  getDomainColor,
+  getDomainBadge,
+  computeHeaderDiffs,
+  computeTabDiffs,
+  buildFieldValueMap,
+  buildDomainRecords,
+  REGION_ORDER,
+} from "@/lib/formulary-diff"
+import type { FieldValueMap, DomainRecord } from "@/lib/formulary-diff"
 
 type Scope =
   | { type: 'all' }
@@ -65,13 +75,18 @@ function ToolbarIcon({ children }: { children: React.ReactNode }) {
 export default function PharmNetFormulary() {
   const [activeTab, setActiveTab] = useState<TabId>("oe-defaults")
   const [searchValue, setSearchValue] = useState("")
+  const [recentSearches, setRecentSearches] = useState<string[]>([])
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
-  const [selectedItem, setSelectedItem] = useState<FormularyItem | null>(null)
+  const [selectedItemPreview, setSelectedItemPreview] = useState<FormularyItem | null>(null)
+  const [domainItems, setDomainItems] = useState<Record<string, FormularyItem | null>>({})
+  const [domainLoading, setDomainLoading] = useState<Record<string, boolean>>({})
+  const [baseDomain, setBaseDomain] = useState<string | null>(null)
   const [dateStr, setDateStr] = useState<string | null>(null)
   const [timeStr, setTimeStr] = useState<string | null>(null)
   const [scope, setScope] = useState<Scope>({ type: 'all' })
   const [availableDomains, setAvailableDomains] = useState<{ region: string; env: string; domain: string }[]>([])
+  const [searchTrigger, setSearchTrigger] = useState<{ value: string; seq: number } | null>(null)
 
   useEffect(() => {
     const updateTime = () => {
@@ -90,6 +105,30 @@ export default function PharmNetFormulary() {
       .then((d) => setAvailableDomains(d.domains ?? []))
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    try { setRecentSearches(JSON.parse(localStorage.getItem('pharmnet-recent-searches') ?? '[]')) } catch {}
+  }, [])
+
+  // Derived diff values — prod domains sorted west → central → east
+  const prodDomains = availableDomains
+    .filter(d => d.env === 'prod')
+    .sort((a, b) => REGION_ORDER.indexOf(a.region as typeof REGION_ORDER[number]) - REGION_ORDER.indexOf(b.region as typeof REGION_ORDER[number]))
+    .map(d => d.domain)
+  const domainItemsList = prodDomains.map(dk => domainItems[dk] ?? null)
+  const selectedItem = (baseDomain && domainItems[baseDomain])
+    ? domainItems[baseDomain]!
+    : selectedItemPreview
+  const loadedItems = domainItemsList.filter(Boolean)
+  const fieldValueMap: FieldValueMap | undefined =
+    loadedItems.length >= 2 ? buildFieldValueMap(prodDomains, domainItemsList) : undefined
+  const domainRecords: DomainRecord[] = buildDomainRecords(prodDomains, domainItemsList)
+  const headerDiffs = computeHeaderDiffs(domainItemsList)
+  const isAnyDomainLoading = Object.values(domainLoading).some(Boolean)
+  // Inventory diffs are expected across regions — exclude from the summary count
+  const totalDiffs = headerDiffs.size + TABS
+    .filter(t => t.id !== 'inventory')
+    .reduce((n, t) => n + computeTabDiffs(domainItemsList, t.id).count, 0)
 
   const [rect, setRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null)
   const isResizing = useRef<{ dir: string, startX: number, startY: number, startRect: { x: number, y: number, w: number, h: number } } | null>(null)
@@ -156,6 +195,19 @@ export default function PharmNetFormulary() {
     isResizing.current = { dir, startX: e.clientX, startY: e.clientY, startRect: rect }
     const target = e.target as HTMLElement
     // We let the window pointermove handle tracking
+  }
+
+  const openSearch = (query?: string) => {
+    setIsSearchModalOpen(true)
+    if (query?.trim()) {
+      const trimmed = query.trim()
+      setRecentSearches(prev => {
+        const next = [trimmed, ...prev.filter(s => s !== trimmed)].slice(0, 10)
+        try { localStorage.setItem('pharmnet-recent-searches', JSON.stringify(next)) } catch {}
+        return next
+      })
+      setSearchTrigger(prev => ({ value: trimmed, seq: (prev?.seq ?? 0) + 1 }))
+    }
   }
 
   if (!rect) {
@@ -250,113 +302,123 @@ export default function PharmNetFormulary() {
         {/* Search area */}
         <div className="flex items-center gap-1 ml-auto">
           <span className="text-xs font-mono">Search for:</span>
-          <Input
-            value={searchValue}
-            onChange={(e) => setSearchValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                setIsSearchModalOpen(true)
-              }
-            }}
-            className="h-5 text-xs font-mono rounded-none border-[#808080] px-1 py-0 w-40 bg-white"
-          />
-          <button onClick={() => setIsSearchModalOpen(true)} className="w-6 h-5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] flex items-center justify-center text-xs">
+          <div className="flex items-center">
+            <Input
+              value={searchValue}
+              onChange={(e) => setSearchValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { setSearchValue(""); return }
+                if (e.key === "Enter") { openSearch(searchValue) }
+              }}
+              className="h-5 text-xs font-mono rounded-none border-[#808080] px-1 py-0 w-40 bg-white"
+            />
+            {searchValue && (
+              <button
+                onClick={() => setSearchValue("")}
+                className="h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default"
+                title="Clear search (Esc)"
+                tabIndex={-1}
+              >
+                ✕
+              </button>
+            )}
+            <RecentSearchDropdown
+              recentSearches={recentSearches}
+              onSelect={s => {
+                setSearchValue(s)
+                openSearch(s)
+              }}
+              onClear={() => {
+                setRecentSearches([])
+                try { localStorage.removeItem('pharmnet-recent-searches') } catch {}
+              }}
+            />
+          </div>
+          <button
+            onClick={() => openSearch(searchValue)}
+            className="w-6 h-5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] flex items-center justify-center text-xs"
+          >
             🔍
           </button>
         </div>
       </div>
 
       {/* Global fields area */}
-      <div className="px-3 py-2 bg-[#D4D0C8] border-b border-[#808080] shrink-0">
-        {/* Row 1: Description / Strength / Status / Therapeutic Substitutions */}
-        <div className="flex gap-3 items-end mb-2">
-          <FormField label="Description:" required className="flex-1 min-w-0 max-w-[220px]">
-            <Input
-              value={selectedItem?.description ?? ""}
-              readOnly
-              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
-            />
-          </FormField>
-          <FormField label="Strength:" required className="w-28">
-            <Input
-              value={selectedItem ? `${selectedItem.strength} ${selectedItem.strengthUnit}`.trim() : ""}
-              readOnly
-              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
-            />
-          </FormField>
-          <FormField label="Status:" className="w-28">
-            <Input
-              value={selectedItem?.status ?? ""}
-              disabled
-              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-[#D4D0C8]"
-            />
-          </FormField>
-          <div className="flex items-start gap-1 pb-0.5 ml-2">
-            <Checkbox className="rounded-none border-[#808080] h-3.5 w-3.5 mt-0.5 shrink-0" />
-            <span className="text-xs font-mono leading-tight">Therapeutic<br />Substitutions</span>
-          </div>
-        </div>
+      <FormularyHeader item={selectedItem} highlightedFields={headerDiffs} fieldValueMap={fieldValueMap} />
 
-        {/* Row 2: Generic / Dosage form / Legal status / Mnemonic */}
-        <div className="flex gap-3 items-end">
-          <FormField label="Generic:" required className="flex-1 min-w-0 max-w-[220px]">
-            <Input
-              value={selectedItem?.genericName ?? ""}
-              readOnly
-              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
-            />
-          </FormField>
-          <FormField label="Dosage form:" required className="w-28">
-            <Input
-              value={selectedItem?.dosageForm ?? ""}
-              readOnly
-              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
-            />
-          </FormField>
-          <FormField label="Legal status:" required className="w-28">
-            <Input
-              value={selectedItem?.legalStatus ?? ""}
-              readOnly
-              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
-            />
-          </FormField>
-          <FormField label="Mnemonic:" required className="flex-1 min-w-0 max-w-[140px]">
-            <Input
-              value={selectedItem?.mnemonic ?? ""}
-              readOnly
-              className="w-full text-xs font-mono rounded-none border-[#808080] px-1 border bg-white"
-            />
-          </FormField>
+      {/* Domain status bar */}
+      {prodDomains.length > 1 && selectedItemPreview && (
+        <div className="flex items-center gap-2.5 px-3 py-1 bg-[#D4D0C8] border-b border-[#808080] shrink-0">
+          {/* Horizontal segmented pill — W | C | E */}
+          <div className="inline-flex rounded-sm overflow-hidden border border-[#808080] shrink-0">
+            {REGION_ORDER.map((reg, i) => {
+              const dk = `${reg}_prod`
+              if (!prodDomains.includes(dk)) return null
+              const { bg, text } = getDomainColor(reg, 'prod')
+              const hasData = !!domainItems[dk]
+              const isLoading = !!domainLoading[dk]
+              const isBase = dk === baseDomain
+              return (
+                <button
+                  key={dk}
+                  onClick={() => hasData && !isLoading && setBaseDomain(dk)}
+                  title={isBase ? `${dk} — active domain` : hasData ? `Switch to ${dk}` : isLoading ? 'Loading…' : 'No data'}
+                  style={{
+                    background: hasData ? bg : '#D0CCC4',
+                    color: hasData ? text : '#909090',
+                    boxShadow: isBase ? 'inset 0 0 0 2px rgba(255,255,255,0.85)' : 'none',
+                    opacity: isLoading ? 0.6 : 1,
+                  }}
+                  className={`text-[9px] font-mono font-bold px-1.5 h-[18px] leading-none select-none flex items-center justify-center cursor-default${i > 0 ? ' border-l border-l-black/20' : ''}`}
+                >
+                  {isLoading ? '·' : getDomainBadge(reg, 'prod')}
+                </button>
+              )
+            })}
+          </div>
+          <span className="text-[10px] font-mono text-[#808080]">
+            {isAnyDomainLoading
+              ? 'Loading domains…'
+              : totalDiffs === 0 ? 'All domains match' : `${totalDiffs} field${totalDiffs !== 1 ? 's' : ''} differ`}
+          </span>
         </div>
-      </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-0.5 px-3 pt-2 bg-[#D4D0C8] shrink-0 border-b border-[#808080]">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`
-              px-1.5 py-0.5 text-xs font-sans border-t border-l border-r border-[#808080] rounded-t-sm
-              ${activeTab === tab.id
-                ? "bg-[#D4D0C8] border-b-[#D4D0C8] relative z-10 top-[1px] -mb-[1px] shadow-sm pb-1"
-                : "bg-[#D4D0C8] hover:bg-[#E0DBD0] mt-0.5 border-b-[#808080]"
-              }
-            `}
-          >
-            {activeTab === tab.id ? <u>{tab.label}</u> : tab.label}
-          </button>
-        ))}
+        {TABS.map((tab) => {
+          const diffs = computeTabDiffs(domainItemsList, tab.id)
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`
+                px-1.5 py-0.5 text-xs font-sans border-t border-l border-r border-[#808080] rounded-t-sm
+                ${activeTab === tab.id
+                  ? "bg-[#D4D0C8] border-b-[#D4D0C8] relative z-10 top-[1px] -mb-[1px] shadow-sm pb-1"
+                  : "bg-[#D4D0C8] hover:bg-[#E0DBD0] mt-0.5 border-b-[#808080]"
+                }
+              `}
+            >
+              {activeTab === tab.id ? <u>{tab.label}</u> : tab.label}
+              {diffs.count > 0 && (
+                <span className={`ml-1 text-[9px] px-1 rounded-full font-bold ${tab.id === 'inventory' ? 'bg-[#909090] text-white' : 'bg-amber-500 text-white'}`}>
+                  *{diffs.count}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
 
       {/* Tab content area */}
       <div className="bg-[#D4D0C8] flex-1 flex flex-col border border-[#808080] mx-3 mb-2 overflow-hidden min-h-0">
-        {activeTab === "oe-defaults" && <OEDefaultsTab item={selectedItem} />}
-        {activeTab === "dispense" && <DispenseTab item={selectedItem} />}
-        {activeTab === "inventory" && <InventoryTab item={selectedItem} />}
-        {activeTab === "clinical" && <ClinicalTab item={selectedItem} />}
-        {activeTab === "supply" && <SupplyTab item={selectedItem} />}
-        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} />}
+        {activeTab === "oe-defaults" && <OEDefaultsTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'oe-defaults').fields} fieldValueMap={fieldValueMap} />}
+        {activeTab === "dispense" && <DispenseTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'dispense').fields} fieldValueMap={fieldValueMap} />}
+        {activeTab === "inventory" && <InventoryTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'inventory').fields} fieldValueMap={fieldValueMap} />}
+        {activeTab === "clinical" && <ClinicalTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'clinical').fields} fieldValueMap={fieldValueMap} />}
+        {activeTab === "supply" && <SupplyTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'supply').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} />}
+        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'identifiers').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} />}
         {activeTab === "tpn-details" && (
           <div className="p-4 text-xs font-mono text-[#808080]">TPN Details tab content</div>
         )}
@@ -408,15 +470,52 @@ export default function PharmNetFormulary() {
           <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{timeStr}</span>
         </div>
       </div>
-      {isSearchModalOpen && (
-        <SearchModal
-          initialSearchValue={searchValue}
-          scope={scope}
-          availableDomains={availableDomains}
-          onClose={() => setIsSearchModalOpen(false)}
-          onSelect={(item) => { setSelectedItem(item); setIsSearchModalOpen(false) }}
-        />
-      )}
+      <SearchModal
+        hidden={!isSearchModalOpen}
+        searchTrigger={searchTrigger}
+        scope={scope}
+        availableDomains={availableDomains}
+        onClose={() => setIsSearchModalOpen(false)}
+        onSelect={(item) => {
+          setSelectedItemPreview(item)
+          setIsSearchModalOpen(false)
+
+          const available = availableDomains.filter(d => d.env === 'prod').map(d => d.domain)
+          if (available.length <= 1) return
+
+          const initialLoading: Record<string, boolean> = {}
+          available.forEach(dk => { initialLoading[dk] = true })
+          setDomainLoading(initialLoading)
+          setDomainItems({})
+          setBaseDomain(null)
+
+          const pyxisId      = item.identifiers?.pyxisId?.trim()      || undefined
+          const chargeNumber = item.identifiers?.chargeNumber?.trim() || undefined
+          const params = new URLSearchParams({ groupId: item.groupId })
+          if (pyxisId)      params.set('pyxisId', pyxisId)
+          if (chargeNumber) params.set('chargeNumber', chargeNumber)
+
+          fetch(`/api/formulary/items?${params}`)
+            .then(r => r.json())
+            .then((data: { items: Record<string, FormularyItem> }) => {
+              const newItems: Record<string, FormularyItem | null> = {}
+              available.forEach(dk => { newItems[dk] = data.items[dk] ?? null })
+              setDomainItems(newItems)
+              const firstLoaded = available.find(dk => data.items[dk])
+              if (firstLoaded) setBaseDomain(firstLoaded)
+            })
+            .catch(() => {
+              const nullItems: Record<string, FormularyItem | null> = {}
+              available.forEach(dk => { nullItems[dk] = null })
+              setDomainItems(nullItems)
+            })
+            .finally(() => {
+              const doneLoading: Record<string, boolean> = {}
+              available.forEach(dk => { doneLoading[dk] = false })
+              setDomainLoading(doneLoading)
+            })
+        }}
+      />
       {isImportModalOpen && (
         <ImportModal onClose={() => setIsImportModalOpen(false)} />
       )}

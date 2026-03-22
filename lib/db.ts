@@ -480,6 +480,92 @@ export async function getAvailableDomains(): Promise<{ region: string; env: stri
   }))
 }
 
+function rowToSupplyRecord(r: Row): SupplyRecord {
+  const extra = JSON.parse(r.supply_json as string)
+  return {
+    ndc: r.ndc as string,
+    isNonReference: Boolean(r.is_non_reference),
+    isActive: Boolean(r.is_active),
+    manufacturer: r.manufacturer as string,
+    manufacturerBrandName: r.manufacturer_brand as string,
+    manufacturerLabelDescription: r.manufacturer_label_desc as string,
+    manufacturerGenericName: extra.manufacturerGenericName ?? '',
+    manufacturerMnemonic: extra.manufacturerMnemonic ?? '',
+    manufacturerPyxisId: extra.manufacturerPyxisId ?? '',
+    manufacturerUb92: extra.manufacturerUb92 ?? '',
+    manufacturerRxUniqueId: extra.manufacturerRxUniqueId ?? '',
+    isManufacturerActive: extra.isManufacturerActive ?? false,
+    manufacturerFormularyStatus: extra.manufacturerFormularyStatus ?? '',
+    isPrimary: Boolean(r.is_primary),
+    isBiological: Boolean(r.is_biological),
+    isBrand: Boolean(r.is_brand),
+    isUnitDose: Boolean(r.is_unit_dose),
+    awpCost: r.awp_cost as number | null,
+    cost1: r.cost1 as number | null,
+    cost2: r.cost2 as number | null,
+    rxDevices: extra.rxDevices ?? [],
+    rxMisc: extra.rxMisc ?? [],
+    rxUniqueId: extra.rxUniqueId ?? '',
+  }
+}
+
+export async function getFormularyItemsForKey(key: {
+  pyxisId?: string
+  chargeNumber?: string
+  groupId: string
+}): Promise<Record<string, FormularyItem>> {
+  const db = getDb()
+
+  let sql: string
+  let arg: string
+  if (key.pyxisId?.trim()) {
+    sql = 'SELECT * FROM formulary_groups WHERE pyxis_id = ?'
+    arg = key.pyxisId.trim()
+  } else if (key.chargeNumber?.trim()) {
+    sql = 'SELECT * FROM formulary_groups WHERE charge_number = ?'
+    arg = key.chargeNumber.trim()
+  } else {
+    sql = 'SELECT * FROM formulary_groups WHERE group_id = ?'
+    arg = key.groupId
+  }
+
+  const { rows } = await db.execute({ sql, args: [arg] })
+  if (rows.length === 0) return {}
+
+  const supplyResults = await Promise.all(
+    rows.map(g =>
+      db.execute({
+        sql: 'SELECT * FROM supply_records WHERE group_id = ? AND domain = ?',
+        args: [g.group_id as string, g.domain as string],
+      })
+    )
+  )
+
+  const out: Record<string, FormularyItem> = {}
+  for (let i = 0; i < rows.length; i++) {
+    const g = rows[i]
+    const domain = g.domain as string
+    out[domain] = {
+      groupId: g.group_id as string,
+      description: g.description as string,
+      strength: g.strength as string,
+      strengthUnit: g.strength_unit as string,
+      status: g.status as 'Active' | 'Inactive',
+      genericName: g.generic_name as string,
+      dosageForm: g.dosage_form as string,
+      legalStatus: g.legal_status as string,
+      mnemonic: g.mnemonic as string,
+      oeDefaults: JSON.parse(g.oe_defaults_json as string) as OeDefaults,
+      dispense: JSON.parse(g.dispense_json as string) as DispenseInfo,
+      clinical: JSON.parse(g.clinical_json as string) as ClinicalInfo,
+      inventory: JSON.parse(g.inventory_json as string) as InventoryInfo,
+      identifiers: JSON.parse(g.identifiers_json as string) as Identifiers,
+      supplyRecords: supplyResults[i].rows.map(rowToSupplyRecord),
+    }
+  }
+  return out
+}
+
 export async function getFormularyItem(
   groupId: string,
   domain?: string
@@ -508,34 +594,7 @@ export async function getFormularyItem(
 
   const { rows: supplyRows } = await db.execute({ sql: supplySql, args: supplyArgs })
 
-  const supplyRecords: SupplyRecord[] = supplyRows.map((r) => {
-    const extra = JSON.parse(r.supply_json as string)
-    return {
-      ndc: r.ndc as string,
-      isNonReference: Boolean(r.is_non_reference),
-      isActive: Boolean(r.is_active),
-      manufacturer: r.manufacturer as string,
-      manufacturerBrandName: r.manufacturer_brand as string,
-      manufacturerLabelDescription: r.manufacturer_label_desc as string,
-      manufacturerGenericName: extra.manufacturerGenericName ?? '',
-      manufacturerMnemonic: extra.manufacturerMnemonic ?? '',
-      manufacturerPyxisId: extra.manufacturerPyxisId ?? '',
-      manufacturerUb92: extra.manufacturerUb92 ?? '',
-      manufacturerRxUniqueId: extra.manufacturerRxUniqueId ?? '',
-      isManufacturerActive: extra.isManufacturerActive ?? false,
-      manufacturerFormularyStatus: extra.manufacturerFormularyStatus ?? '',
-      isPrimary: Boolean(r.is_primary),
-      isBiological: Boolean(r.is_biological),
-      isBrand: Boolean(r.is_brand),
-      isUnitDose: Boolean(r.is_unit_dose),
-      awpCost: r.awp_cost as number | null,
-      cost1: r.cost1 as number | null,
-      cost2: r.cost2 as number | null,
-      rxDevices: extra.rxDevices ?? [],
-      rxMisc: extra.rxMisc ?? [],
-      rxUniqueId: extra.rxUniqueId ?? '',
-    }
-  })
+  const supplyRecords: SupplyRecord[] = supplyRows.map(rowToSupplyRecord)
 
   return {
     groupId: g.group_id as string,
