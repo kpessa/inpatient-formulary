@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getFormularyItemsForKey } from "@/lib/db"
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const pyxisId        = searchParams.get("pyxisId")        ?? undefined

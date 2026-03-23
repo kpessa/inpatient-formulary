@@ -37,6 +37,21 @@ function fieldToSqlExpression(field: string): string {
   }
 }
 
+function matchesRuleValue(field: string, operator: string, value: string, rawVal: string | null): boolean {
+  if (rawVal === null) return false
+  if (field === 'therapeuticClass' && operator === 'equals') {
+    const codes = [value, ...tcDescendants(value)]
+    return codes.includes(rawVal)
+  }
+  switch (operator) {
+    case 'equals':      return rawVal === value
+    case 'contains':    return rawVal.toLowerCase().includes(value.toLowerCase())
+    case 'starts_with': return rawVal.toLowerCase().startsWith(value.toLowerCase())
+    case 'ends_with':   return rawVal.toLowerCase().endsWith(value.toLowerCase())
+    default:            return rawVal === value
+  }
+}
+
 function buildRuleClause(
   field: string,
   operator: string,
@@ -304,27 +319,51 @@ export async function getGroupIdCategories(
     })
   }
 
-  // Rule-based membership — one query per rule, filtered to our groupIds
-  const { rows: ruleRows } = await db.execute(`
-    SELECT cr.field, cr.operator, cr.value,
-           dc.id AS category_id, dc.name, dc.color
-    FROM category_rules cr
-    JOIN drug_categories dc ON dc.id = cr.category_id
-  `)
+  // Rule-based membership — fetch all rules + all needed fields in 2 queries, match in memory
+  const [{ rows: ruleRows }, { rows: fieldRows }] = await Promise.all([
+    db.execute(`
+      SELECT cr.field, cr.operator, cr.value,
+             dc.id AS category_id, dc.name, dc.color
+      FROM category_rules cr
+      JOIN drug_categories dc ON dc.id = cr.category_id
+    `),
+    db.execute({
+      sql: `SELECT group_id,
+                   dosage_form,
+                   status,
+                   strength,
+                   json_extract(dispense_json, '$.dispenseCategory') AS dispenseCategory,
+                   json_extract(clinical_json, '$.therapeuticClass') AS therapeuticClass
+            FROM formulary_groups
+            WHERE group_id IN (${placeholders})
+            GROUP BY group_id`,
+      args: groupIds,
+    }),
+  ])
+  const fieldMap = new Map<string, Record<string, string | null>>()
+  for (const r of fieldRows) {
+    fieldMap.set(r.group_id as string, {
+      dosageForm:       r.dosage_form as string | null,
+      status:           r.status as string | null,
+      strength:         r.strength as string | null,
+      dispenseCategory: r.dispenseCategory as string | null,
+      therapeuticClass: r.therapeuticClass as string | null,
+    })
+  }
   for (const rule of ruleRows) {
-    const fieldExpr = fieldToSqlExpression(rule.field as string)
-    const { clause, args: ruleArgs } = buildRuleClause(rule.field as string, rule.operator as string, rule.value as string)
+    const field    = rule.field as string
+    const operator = rule.operator as string
+    const value    = rule.value as string
     const cat = {
-      id: rule.category_id as string,
-      name: rule.name as string,
+      id:    rule.category_id as string,
+      name:  rule.name as string,
       color: (rule.color as string | null) ?? '#6B7280',
     }
-    const { rows: matched } = await db.execute({
-      sql: `SELECT DISTINCT group_id FROM formulary_groups
-            WHERE group_id IN (${placeholders}) AND ${fieldExpr} ${clause}`,
-      args: [...groupIds, ...ruleArgs],
-    })
-    for (const m of matched) addMatch(m.group_id as string, cat)
+    for (const [groupId, fields] of fieldMap) {
+      if (matchesRuleValue(field, operator, value, fields[field] ?? null)) {
+        addMatch(groupId, cat)
+      }
+    }
   }
 
   return result

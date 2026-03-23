@@ -611,13 +611,12 @@ export async function getFormularyItemsForKey(
   const { rows } = await db.execute({ sql, args: [arg] })
   if (rows.length === 0) return {}
 
-  const supplyResults = await Promise.all(
-    rows.map(g =>
-      db.execute({
-        sql: 'SELECT * FROM supply_records WHERE group_id = ? AND domain = ?',
-        args: [g.group_id as string, g.domain as string],
-      })
-    )
+  const supplyResults = await db.batch(
+    rows.map(g => ({
+      sql: 'SELECT * FROM supply_records WHERE group_id = ? AND domain = ?',
+      args: [g.group_id as string, g.domain as string],
+    })),
+    'read',
   )
 
   // Fetch overrides in one batch when overlay mode is active.

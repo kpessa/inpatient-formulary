@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getFormularyItem } from "@/lib/db"
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const groupId        = searchParams.get("groupId")        ?? ""
