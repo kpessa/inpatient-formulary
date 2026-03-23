@@ -744,7 +744,9 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       const fieldsToQuery = useParallel ? classifyActiveFields(query, activeFields) : new Set<string>()
 
       if (useParallel) {
-        // ── Parallel path: one fetch per field, results trickle in as each resolves ──
+        // ── Parallel path: one fetch, server runs all field queries in parallel ──
+        // Returns regular JSON (not NDJSON streaming) so corporate VPN proxies that
+        // buffer or truncate chunked transfer encoding receive the full response.
         if (fieldsToQuery.size === 0) {
           setResults([])
           setGroupCategories({})
@@ -757,37 +759,22 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
           [f, { state: 'loading' as const, count: 0, ms: 0, limit: maxResults }]
         )))
 
-        // One request with all fields — server parallelizes internally and streams
-        // NDJSON back (one line per field), avoiding per-field cold starts.
-        const fieldResults: Record<string, SearchResult[]> = {}
         const fp = new URLSearchParams([...baseParams.entries(), ['fields', [...fieldsToQuery].join(',')]])
         const fieldRes = await fetch(`/api/formulary/search?${fp}`)
-        const fieldReader = fieldRes.body!.getReader()
-        const fieldDecoder = new TextDecoder()
-        let fieldBuf = ''
-        while (true) {
-          const { done, value } = await fieldReader.read()
-          if (value) fieldBuf += fieldDecoder.decode(value, { stream: !done })
-          const lines = fieldBuf.split('\n')
-          fieldBuf = lines.pop()!
-          for (const line of lines) {
-            if (!line.trim()) continue
-            const chunk = JSON.parse(line) as { field: string; results: SearchResult[]; ms: number; rawCount: number }
-            fieldResults[chunk.field] = chunk.results
-            setResults(prev => {
-              const existingIds = new Set(prev.map(r => `${r.groupId}|${r.region}|${r.environment}`))
-              const fresh = chunk.results.filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
-              return [...prev, ...fresh]
-            })
-            setFieldStatus(prev => ({
-              ...prev,
-              [chunk.field]: { state: 'done', count: chunk.rawCount, ms: chunk.ms, limit: maxResults },
-            }))
-          }
-          if (done) break
+        const { fields: fieldResults, ms: fieldMs } = await fieldRes.json() as {
+          fields: Record<string, SearchResult[]>
+          ms: number
         }
 
-        // Deduplicate merged results
+        // Update field status
+        for (const [field, results] of Object.entries(fieldResults)) {
+          setFieldStatus(prev => ({
+            ...prev,
+            [field]: { state: 'done', count: results.length, ms: fieldMs, limit: maxResults },
+          }))
+        }
+
+        // Deduplicate across fields
         const seen = new Set<string>()
         const finalResults = Object.values(fieldResults).flat().filter(r => {
           const key = `${r.groupId}|${r.region}|${r.environment}`
@@ -795,8 +782,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
           seen.add(key)
           return true
         })
-        const finalTotal = finalResults.length
-        setTotal(finalTotal)
+        setResults(finalResults)
+        setTotal(finalResults.length)
         setQueryMs(Math.round(performance.now() - t0))
 
         setTimeout(() => loadDetails(finalResults, gen), 0)

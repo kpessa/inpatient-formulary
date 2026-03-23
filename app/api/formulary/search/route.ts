@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { searchFormulary, searchByField, searchByFields, searchByPyxisIds } from "@/lib/db"
 import type { SearchResult, FieldSearchParams, AdvancedFilters } from "@/lib/db"
 import { tcDescendants } from "@/lib/therapeutic-class-map"
@@ -73,10 +73,9 @@ export async function GET(req: NextRequest) {
     const t = performance.now()
     const fieldResults = await searchByFields(fields, q, region, environment, showInactive, limit)
     const ms = Math.round(performance.now() - t)
-    const body = Object.entries(fieldResults)
-      .map(([field, results]) => JSON.stringify({ field, results, ms, rawCount: results.length }))
-      .join('\n') + '\n'
-    return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })
+    // Return as regular JSON (not NDJSON streaming) so corporate VPN proxies that buffer
+    // or truncate chunked transfer encoding receive complete results.
+    return NextResponse.json({ fields: fieldResults, ms })
   }
 
   // Single-query path: facility filter, wildcard, or no fields specified

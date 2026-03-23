@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server'
 import { fetchInventoryByGroupIds } from '@/lib/db'
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const groupIds = (searchParams.get('groupIds') ?? '').split(',').filter(Boolean)
