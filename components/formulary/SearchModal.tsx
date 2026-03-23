@@ -21,7 +21,6 @@ import { Badge } from "@/components/ui/badge"
 import type { FormularyItem, DrugCategory, SearchFilterGroup } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
 import type { DomainValue } from "@/lib/formulary-diff"
-import { CompareModal } from "./CompareModal"
 import { RecentSearchDropdown } from "./RecentSearchDropdown"
 import { TherapeuticClassPicker } from "./TherapeuticClassPicker"
 import { tcDescendants, tcLabel } from "@/lib/therapeutic-class-map"
@@ -196,7 +195,6 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
   const [isUnified, setIsUnified] = useState(true)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
-  const [isCompareOpen, setIsCompareOpen] = useState(false)
 
   const toggleExpand = useCallback((groupId: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -382,7 +380,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   // Drag-to-reorder
   const [colDrag, setColDrag] = useState<{ from: number; to: number } | null>(null)
   const colDragRef = useRef<{ from: number; to: number; startX: number; colId: string } | null>(null)
-  const [sortState, setSortState] = useState<{ colId: string; dir: 'asc' | 'desc' } | null>(null)
+  const [sortStack, setSortStack] = useState<{ colId: string; dir: 'asc' | 'desc' }[]>([])
   const thRefs = useRef<(HTMLTableCellElement | null)[]>([])
   const tableRef = useRef<HTMLTableElement | null>(null)
 
@@ -413,9 +411,13 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
   const advActiveCount =
     advFilter.tcItems.length + advFilter.dfItems.length +
-    advFilter.rtItems.length + advFilter.dcItems.length
+    advFilter.rtItems.length + advFilter.dcItems.length +
+    (categoryFilter ? 1 : 0)
 
-  const clearAdvFilters = () => setAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
+  const clearAdvFilters = () => {
+    setAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
+    handleCategorySelect('')
+  }
 
   // Advanced tab state
   const [showIvSetFilter, setShowIvSetFilter] = useState(false)
@@ -584,12 +586,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       if (colDragRef.current) {
         const { from, to, startX, colId } = colDragRef.current
         if (Math.abs(e.clientX - startX) < 5) {
-          // Click: toggle sort on this column
-          setSortState(prev =>
-            prev?.colId === colId
-              ? { colId, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-              : { colId, dir: 'asc' }
-          )
+          // Click: push to top of sort stack as primary (or toggle if already primary)
+          setSortStack(prev => {
+            if (prev.length > 0 && prev[0].colId === colId) {
+              return prev.map(s => s.colId === colId ? { ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' } : s)
+            }
+            const rest = prev.filter(s => s.colId !== colId)
+            return [{ colId, dir: 'asc' }, ...rest].slice(0, 3)
+          })
         } else if (from !== to) {
           setCols(prev => {
             const next = [...prev]
@@ -1073,12 +1077,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     return map
   }, [filteredResults])
 
-  const sortedResults = sortState
+  const sortedResults = sortStack.length > 0
     ? [...baseResults].sort((a, b) => {
-        const av = getSortValue(a, sortState.colId).toLowerCase()
-        const bv = getSortValue(b, sortState.colId).toLowerCase()
-        const cmp = av < bv ? -1 : av > bv ? 1 : 0
-        return sortState.dir === 'asc' ? cmp : -cmp
+        for (const { colId, dir } of sortStack) {
+          const av = getSortValue(a, colId).toLowerCase()
+          const bv = getSortValue(b, colId).toLowerCase()
+          const cmp = av < bv ? -1 : av > bv ? 1 : 0
+          if (cmp !== 0) return dir === 'asc' ? cmp : -cmp
+        }
+        return 0
       })
     : baseResults
 
@@ -1128,7 +1135,6 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
           <div className="flex items-center gap-1.5 pointer-events-none">
             <div className="w-4 h-4 bg-white border border-white/40 flex items-center justify-center text-[8px] rounded-full text-blue-500 shadow-sm leading-none pt-0.5">💊</div>
             <span className="text-sm font-bold tracking-wide">Product Search</span>
-            <span className="text-xs font-mono opacity-80 ml-2">[{scopeLabel(scope)}]</span>
           </div>
           <div className="flex gap-1" onPointerDown={e => e.stopPropagation()}>
             <button onPointerDown={e => { e.stopPropagation(); onMinimize?.() }} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
@@ -1274,41 +1280,6 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     }}
                   />
                 </div>
-                <span className="text-xs text-[#808080]">in:</span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button className="h-5 px-2 border border-[#808080] text-black bg-white text-xs flex items-center gap-1 shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] hover:bg-[#E8E8E0] min-w-[90px] max-w-[140px] truncate">
-                      {scopeLabel(scope)} ▾
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="text-xs font-mono min-w-[160px]">
-                    <DropdownMenuItem onClick={() => setScope({ type: 'all' })}>
-                      All Domains
-                    </DropdownMenuItem>
-                    {availableDomains.length > 0 && (
-                      <>
-                        <DropdownMenuSeparator />
-                        {availableDomains.map((d) => (
-                          <DropdownMenuItem key={`${d.region}-${d.env}`} onClick={() => setScope({ type: 'domain', region: d.region, env: d.env })}>
-                            {d.region} {d.env}
-                          </DropdownMenuItem>
-                        ))}
-                        <DropdownMenuSeparator />
-                        {[...new Set(availableDomains.map((d) => d.region))].map((r) => (
-                          <DropdownMenuItem key={`region-${r}`} onClick={() => setScope({ type: 'region', region: r })}>
-                            {r} (all)
-                          </DropdownMenuItem>
-                        ))}
-                        <DropdownMenuSeparator />
-                        {[...new Set(availableDomains.map((d) => d.env))].map((e) => (
-                          <DropdownMenuItem key={`env-${e}`} onClick={() => setScope({ type: 'env', env: e })}>
-                            {e} (all regions)
-                          </DropdownMenuItem>
-                        ))}
-                      </>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
                 <button
                   onClick={() => handleSearch()}
                   className="h-6 px-4 border border-[#808080] text-black bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] active:border-t-black active:border-l-black flex items-center justify-center text-xs ml-auto shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
@@ -1338,43 +1309,11 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   />
                   Unified
                 </label>
-                {allCategories.length > 0 && (
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-xs text-[#808080] whitespace-nowrap">Cat:</span>
-                    <select
-                      value={categoryFilter}
-                      onChange={e => handleCategorySelect(e.target.value)}
-                      className="h-5 text-xs font-sans border border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] px-1 max-w-[120px]"
-                    >
-                      <option value="">All</option>
-                      {allCategories.map(cat => (
-                        <option key={cat.id} value={cat.id}>{cat.name}</option>
-                      ))}
-                    </select>
-                    {categoryFilter && (
-                      <button
-                        onClick={() => handleCategorySelect('')}
-                        className="h-4 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black"
-                        title="Clear category search"
-                      >✕</button>
-                    )}
-                    {categoriesLoading && (
-                      <span className="text-[10px] text-[#808080] animate-pulse">…</span>
-                    )}
-                  </div>
-                )}
                 {(() => {
                   const selectedRow = selectedResultIdx !== null ? sortedResults[selectedResultIdx] : null
                   const domainCount = selectedRow ? (variantsByGroup.get(getSemanticKey(selectedRow))?.length ?? 0) : 0
                   return (
                     <>
-                      <button
-                        disabled={!selectedRow || domainCount <= 1}
-                        onClick={() => setIsCompareOpen(true)}
-                        className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Compare
-                      </button>
                       <button
                         onClick={() => cols.forEach((col, i) => { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(i) })}
                         className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
@@ -1389,70 +1328,95 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
               {/* Advanced Filter Panel */}
               {showAdvanced && (
-                <div className="shrink-0 border-t border-b border-[#808080] bg-[#F0EEE8] px-2 py-1.5 space-y-1.5">
-                  {/* Therapeutic Class */}
-                  <div className="flex items-start gap-1.5">
-                    <span className="text-[10px] font-mono text-[#404040] whitespace-nowrap w-24 shrink-0 pt-0.5">Therap. Class</span>
-                    <div className="flex flex-wrap items-center gap-1 flex-1 min-w-0">
-                      <TherapeuticClassPicker
-                        value=""
-                        onChange={code => {
-                          if (advFilter.tcItems.find(i => i.id === code)) return
-                          setAdvFilter(prev => ({
-                            ...prev,
-                            tcItems: [...prev.tcItems, {
-                              id: code, type: 'tc', op: 'include',
-                              label: tcLabel(code), icon: '', values: [code],
-                            }],
-                          }))
-                        }}
+                <div className="shrink-0 border-t border-b border-[#808080] bg-[#F0EEE8] px-2 py-1.5 space-y-1">
+
+                  {/* ── Compact trigger row ── */}
+                  <div className="flex flex-wrap items-center gap-1">
+                    {/* Category compact select */}
+                    {allCategories.length > 0 && (
+                      <select
+                        value={categoryFilter}
+                        onChange={e => handleCategorySelect(e.target.value)}
+                        className={`h-5 text-[9px] font-mono border border-[#808080] px-1 max-w-[120px] shadow-[inset_1px_1px_0_#fff,inset_-1px_-1px_0_#808080] ${
+                          categoryFilter ? 'bg-[#E8F0FF] border-[#316AC5] text-[#316AC5]' : 'bg-[#D4D0C8] text-black'
+                        }`}
                       >
-                        <button className="h-5 px-1.5 text-[9px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] shadow-[inset_1px_1px_0_#fff,inset_-1px_-1px_0_#808080] whitespace-nowrap shrink-0">
-                          ▼ Add…
-                        </button>
-                      </TherapeuticClassPicker>
-                      <FilterChips
-                        items={advFilter.tcItems}
-                        onChange={items => setAdvFilter(prev => ({ ...prev, tcItems: items }))}
-                      />
-                    </div>
-                  </div>
+                        <option value="">Cat: All</option>
+                        {allCategories.map(cat => (
+                          <option key={cat.id} value={cat.id}>{cat.name}</option>
+                        ))}
+                      </select>
+                    )}
+                    {categoriesLoading && (
+                      <span className="text-[10px] text-[#808080] animate-pulse">…</span>
+                    )}
 
-                  {/* Dosage Form */}
-                  <FieldFilterSelect
-                    field="dosage_form"
-                    filterGroups={filterGroups}
-                    items={advFilter.dfItems}
-                    onChange={items => setAdvFilter(prev => ({ ...prev, dfItems: items }))}
-                  />
+                    {/* TC compact trigger */}
+                    <TherapeuticClassPicker
+                      value=""
+                      onChange={code => {
+                        if (advFilter.tcItems.find(i => i.id === code)) return
+                        setAdvFilter(prev => ({
+                          ...prev,
+                          tcItems: [...prev.tcItems, {
+                            id: code, type: 'tc', op: 'include',
+                            label: tcLabel(code), icon: '', values: [code],
+                          }],
+                        }))
+                      }}
+                    >
+                      <button className={`h-5 px-1.5 text-[9px] font-mono border border-[#808080] shadow-[inset_1px_1px_0_#fff,inset_-1px_-1px_0_#808080] whitespace-nowrap ${
+                        advFilter.tcItems.length > 0 ? 'bg-[#E8F0FF] border-[#316AC5] text-[#316AC5]' : 'bg-[#D4D0C8] hover:bg-[#E8E8E0] text-black'
+                      }`}>
+                        ▼ Therap. Class
+                        {advFilter.tcItems.length > 0 && (
+                          <span className="ml-1 bg-[#316AC5] text-white text-[8px] px-1 rounded-full">{advFilter.tcItems.length}</span>
+                        )}
+                      </button>
+                    </TherapeuticClassPicker>
 
-                  {/* Route */}
-                  <FieldFilterSelect
-                    field="route"
-                    filterGroups={filterGroups}
-                    items={advFilter.rtItems}
-                    onChange={items => setAdvFilter(prev => ({ ...prev, rtItems: items }))}
-                  />
+                    {/* DF / Route / DC compact triggers */}
+                    <FieldFilterSelect compact field="dosage_form"       filterGroups={filterGroups} items={advFilter.dfItems} onChange={items => setAdvFilter(prev => ({ ...prev, dfItems: items }))} />
+                    <FieldFilterSelect compact field="route"             filterGroups={filterGroups} items={advFilter.rtItems} onChange={items => setAdvFilter(prev => ({ ...prev, rtItems: items }))} />
+                    <FieldFilterSelect compact field="dispense_category" filterGroups={filterGroups} items={advFilter.dcItems} onChange={items => setAdvFilter(prev => ({ ...prev, dcItems: items }))} />
 
-                  {/* Dispense Category */}
-                  <FieldFilterSelect
-                    field="dispense_category"
-                    filterGroups={filterGroups}
-                    items={advFilter.dcItems}
-                    onChange={items => setAdvFilter(prev => ({ ...prev, dcItems: items }))}
-                  />
-
-                  {/* Clear All */}
-                  {advActiveCount > 0 && (
-                    <div className="flex justify-end">
+                    {/* Clear All — right side */}
+                    {advActiveCount > 0 && (
                       <button
                         onClick={clearAdvFilters}
-                        className="h-5 px-2 text-[9px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#FFCCCC] hover:border-[#CC0000]"
+                        className="ml-auto h-5 px-2 text-[9px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#FFCCCC] hover:border-[#CC0000]"
                       >
                         Clear All ({advActiveCount})
                       </button>
+                    )}
+                  </div>
+
+                  {/* ── Expanded chip rows (only when filter has items) ── */}
+                  {advFilter.tcItems.length > 0 && (
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className="text-[10px] font-mono text-[#404040] whitespace-nowrap w-24 shrink-0">Therap. Class</span>
+                      <FilterChips items={advFilter.tcItems} onChange={items => setAdvFilter(prev => ({ ...prev, tcItems: items }))} />
                     </div>
                   )}
+                  {advFilter.dfItems.length > 0 && (
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className="text-[10px] font-mono text-[#404040] whitespace-nowrap w-24 shrink-0">Dosage Form</span>
+                      <FilterChips items={advFilter.dfItems} onChange={items => setAdvFilter(prev => ({ ...prev, dfItems: items }))} />
+                    </div>
+                  )}
+                  {advFilter.rtItems.length > 0 && (
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className="text-[10px] font-mono text-[#404040] whitespace-nowrap w-24 shrink-0">Route</span>
+                      <FilterChips items={advFilter.rtItems} onChange={items => setAdvFilter(prev => ({ ...prev, rtItems: items }))} />
+                    </div>
+                  )}
+                  {advFilter.dcItems.length > 0 && (
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className="text-[10px] font-mono text-[#404040] whitespace-nowrap w-24 shrink-0">Dispense Cat.</span>
+                      <FilterChips items={advFilter.dcItems} onChange={items => setAdvFilter(prev => ({ ...prev, dcItems: items }))} />
+                    </div>
+                  )}
+
                 </div>
               )}
 
@@ -1573,9 +1537,17 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                               }}
                             >
                               {col.label}
-                              {sortState?.colId === col.id && (
-                                <span className="ml-1 text-[10px]">{sortState.dir === 'asc' ? '▲' : '▼'}</span>
-                              )}
+                              {(() => {
+                                const idx = sortStack.findIndex(s => s.colId === col.id)
+                                if (idx === -1) return null
+                                const { dir } = sortStack[idx]
+                                return (
+                                  <span className="ml-1 text-[9px] font-bold opacity-80">
+                                    {sortStack.length > 1 && <sup>{idx + 1}</sup>}
+                                    {dir === 'asc' ? '▲' : '▼'}
+                                  </span>
+                                )
+                              })()}
                             </span>
                             {/* Filter button */}
                             <button
@@ -2456,19 +2428,6 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
     </div>
 
-    {isCompareOpen && (() => {
-      const selectedRow = selectedResultIdx !== null ? sortedResults[selectedResultIdx] : null
-      if (!selectedRow) return null
-      const variants = variantsByGroup.get(getSemanticKey(selectedRow)) ?? []
-      const domains = variants.map(getDomainKey)
-      return (
-        <CompareModal
-          groupId={selectedRow.groupId}
-          domains={domains}
-          onClose={() => setIsCompareOpen(false)}
-        />
-      )
-    })()}
     </>
   )
 }

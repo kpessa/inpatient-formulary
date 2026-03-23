@@ -94,11 +94,11 @@ function buildAdvancedClauses(
     sqlArgs.push(...adv.dosageFormExclude)
   }
   if (adv.therapeuticClassCodes?.length) {
-    conditions.push(`json_extract(clinical_json, '$.therapeuticClass') IN (${adv.therapeuticClassCodes.map(() => '?').join(',')})`)
+    conditions.push(`therapeutic_class IN (${adv.therapeuticClassCodes.map(() => '?').join(',')})`)
     sqlArgs.push(...adv.therapeuticClassCodes)
   }
   if (adv.therapeuticClassExcludeCodes?.length) {
-    conditions.push(`json_extract(clinical_json, '$.therapeuticClass') NOT IN (${adv.therapeuticClassExcludeCodes.map(() => '?').join(',')})`)
+    conditions.push(`therapeutic_class NOT IN (${adv.therapeuticClassExcludeCodes.map(() => '?').join(',')})`)
     sqlArgs.push(...adv.therapeuticClassExcludeCodes)
   }
   if (adv.dispenseCategoryInclude?.length) {

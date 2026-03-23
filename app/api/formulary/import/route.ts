@@ -49,14 +49,16 @@ export async function POST(req: NextRequest) {
           group_id, description, generic_name, mnemonic,
           charge_number, brand_name, brand_name2, brand_name3, pyxis_id,
           status, formulary_status, strength, strength_unit, dosage_form, legal_status,
-          identifiers_json, oe_defaults_json, dispense_json, clinical_json, inventory_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          identifiers_json, oe_defaults_json, dispense_json, clinical_json, inventory_json,
+          therapeutic_class
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           g.domain, g.region, g.environment, g.extracted_at,
           g.group_id, g.description, g.generic_name, g.mnemonic,
           g.charge_number, g.brand_name, g.brand_name2, g.brand_name3, g.pyxis_id,
           g.status, g.formulary_status, g.strength, g.strength_unit, g.dosage_form, g.legal_status,
           g.identifiers_json, g.oe_defaults_json, g.dispense_json, g.clinical_json, g.inventory_json,
+          (() => { try { return (JSON.parse(g.clinical_json || '{}') as Record<string, string>)?.therapeuticClass || '' } catch { return '' } })(),
         ],
       })
     }

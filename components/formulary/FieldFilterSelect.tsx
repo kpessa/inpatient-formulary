@@ -82,9 +82,10 @@ interface Props {
   filterGroups: SearchFilterGroup[]
   items: AdvFilterItem[]
   onChange: (items: AdvFilterItem[]) => void
+  compact?: boolean
 }
 
-export function FieldFilterSelect({ field, filterGroups, items, onChange }: Props) {
+export function FieldFilterSelect({ field, filterGroups, items, onChange, compact }: Props) {
   const [isOpen, setIsOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'groups' | 'values'>('groups')
   const [search, setSearch] = useState('')
@@ -124,6 +125,97 @@ export function FieldFilterSelect({ field, filterGroups, items, onChange }: Prop
   const toggleValue = (v: string) => {
     if (isActive(v)) onChange(items.filter(i => i.id !== v))
     else onChange([...items, { id: v, type: 'value', op: 'include', label: v, icon: '', values: [v] }])
+  }
+
+  if (compact) {
+    return (
+      <div className="relative" ref={containerRef}>
+        <button
+          onClick={() => { setIsOpen(v => !v); setSearch('') }}
+          className={`h-5 px-1.5 text-[9px] font-mono border border-[#808080] shadow-[inset_1px_1px_0_#fff,inset_-1px_-1px_0_#808080] whitespace-nowrap ${
+            items.length > 0
+              ? 'bg-[#E8F0FF] border-[#316AC5] text-[#316AC5]'
+              : 'bg-[#D4D0C8] hover:bg-[#E8E8E0] text-black'
+          }`}
+        >
+          ▼ {FIELD_LABELS[field]}
+          {items.length > 0 && (
+            <span className="ml-1 bg-[#316AC5] text-white text-[8px] px-1 rounded-full">{items.length}</span>
+          )}
+        </button>
+        {isOpen && (
+          <div className="absolute top-6 left-0 z-50 w-64 bg-white border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.3)]">
+            {/* Tabs */}
+            <div className="flex border-b border-[#808080] bg-[#D4D0C8]">
+              <button
+                onClick={() => setActiveTab('groups')}
+                className={`px-2 py-0.5 text-[9px] font-mono border-r border-[#808080] ${activeTab === 'groups' ? 'bg-white' : 'hover:bg-[#C8C4BC]'}`}
+              >
+                Filter Groups
+              </button>
+              <button
+                onClick={() => { setActiveTab('values'); loadValues() }}
+                className={`px-2 py-0.5 text-[9px] font-mono ${activeTab === 'values' ? 'bg-white' : 'hover:bg-[#C8C4BC]'}`}
+              >
+                Values
+              </button>
+            </div>
+            {/* Search */}
+            <div className="p-1 border-b border-[#E0DDD8]">
+              <input
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Filter…"
+                className="w-full text-[9px] font-mono border border-[#808080] px-1.5 py-0.5 bg-white focus:outline-none"
+              />
+            </div>
+            {/* List */}
+            <div className="max-h-52 overflow-y-auto">
+              {activeTab === 'groups' ? (
+                fieldGroups.length === 0 ? (
+                  <div className="p-2 text-[9px] text-[#808080] italic">
+                    No filter groups for this field. Create them in Category Manager → Filter Groups.
+                  </div>
+                ) : fieldGroups
+                    .filter(g => !search || g.name.toLowerCase().includes(search.toLowerCase()))
+                    .map(g => (
+                      <button
+                        key={g.id}
+                        onClick={() => toggleGroup(g)}
+                        className={`w-full text-left px-2 py-1 text-[9px] font-mono flex items-center gap-1.5 border-b border-[#F0EEE8] ${
+                          isActive(g.id) ? 'bg-[#EEF4FF]' : 'hover:bg-[#F8F6F0]'
+                        }`}
+                      >
+                        <span className="text-[11px] shrink-0">{g.icon || '▪'}</span>
+                        <span className="flex-1 truncate">{g.name}</span>
+                        <span className="text-[8px] text-[#808080] shrink-0">{g.values.length}</span>
+                        {isActive(g.id) && <span className="text-[#316AC5] text-[10px] shrink-0">✓</span>}
+                      </button>
+                    ))
+              ) : loadingValues ? (
+                <div className="p-2 text-[9px] text-[#808080]">Loading…</div>
+              ) : (
+                distinctValues
+                  .filter(v => !search || v.toLowerCase().includes(search.toLowerCase()))
+                  .map(v => (
+                    <button
+                      key={v}
+                      onClick={() => toggleValue(v)}
+                      className={`w-full text-left px-2 py-0.5 text-[9px] font-mono border-b border-[#F0EEE8] flex items-center gap-1 ${
+                        isActive(v) ? 'bg-[#EEF4FF]' : 'hover:bg-[#F8F6F0]'
+                      }`}
+                    >
+                      {isActive(v) && <span className="text-[#316AC5] text-[10px] shrink-0">✓</span>}
+                      <span>{v}</span>
+                    </button>
+                  ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (

@@ -141,9 +141,15 @@ CREATE TABLE IF NOT EXISTS search_filter_groups (
   created_at  TEXT DEFAULT (datetime('now'))
 );
 
--- Denormalized columns extracted from JSON blobs (added via scripts/migrate_filter_columns.ts)
+-- Denormalized columns extracted from JSON blobs (added via migration scripts)
 -- ALTER TABLE formulary_groups ADD COLUMN route TEXT NOT NULL DEFAULT '';
 -- ALTER TABLE formulary_groups ADD COLUMN dispense_category TEXT NOT NULL DEFAULT '';
 -- CREATE INDEX IF NOT EXISTS idx_fg_dosage_form      ON formulary_groups(dosage_form);
 -- CREATE INDEX IF NOT EXISTS idx_fg_route            ON formulary_groups(route);
 -- CREATE INDEX IF NOT EXISTS idx_fg_dispense_cat     ON formulary_groups(dispense_category);
+-- (scripts/migrate_filter_columns.ts)
+--
+-- ALTER TABLE formulary_groups ADD COLUMN therapeutic_class TEXT NOT NULL DEFAULT '';
+-- UPDATE formulary_groups SET therapeutic_class = COALESCE(json_extract(clinical_json, '$.therapeuticClass'), '') WHERE therapeutic_class = '';
+-- CREATE INDEX IF NOT EXISTS idx_fg_therapeutic_class ON formulary_groups(therapeutic_class);
+-- (scripts/migrate_therapeutic_class.ts)
