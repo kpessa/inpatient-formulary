@@ -744,9 +744,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       const fieldsToQuery = useParallel ? classifyActiveFields(query, activeFields) : new Set<string>()
 
       if (useParallel) {
-        // ── Parallel path: one fetch, server runs all field queries in parallel ──
-        // Returns regular JSON (not NDJSON streaming) so corporate VPN proxies that
-        // buffer or truncate chunked transfer encoding receive the full response.
+        // ── Parallel path: one request per field, all fired in parallel ──
+        // Each field returns a small regular JSON response (not NDJSON streaming).
+        // VPN-safe: no chunked streaming. Faster than bundled: results trickle in
+        // as each field's independent response arrives, instead of waiting for all.
         if (fieldsToQuery.size === 0) {
           setResults([])
           setGroupCategories({})
@@ -759,22 +760,31 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
           [f, { state: 'loading' as const, count: 0, ms: 0, limit: maxResults }]
         )))
 
-        const fp = new URLSearchParams([...baseParams.entries(), ['fields', [...fieldsToQuery].join(',')]])
-        const fieldRes = await fetch(`/api/formulary/search?${fp}`)
-        const { fields: fieldResults, ms: fieldMs } = await fieldRes.json() as {
-          fields: Record<string, SearchResult[]>
-          ms: number
-        }
+        const fieldResults: Record<string, SearchResult[]> = {}
 
-        // Update field status
-        for (const [field, results] of Object.entries(fieldResults)) {
-          setFieldStatus(prev => ({
-            ...prev,
-            [field]: { state: 'done', count: results.length, ms: fieldMs, limit: maxResults },
-          }))
-        }
+        // Fire all field requests in parallel; update UI as each resolves
+        const fieldPromises = [...fieldsToQuery].map(field => {
+          const fp = new URLSearchParams([...baseParams.entries(), ['fields', field]])
+          return fetch(`/api/formulary/search?${fp}`)
+            .then(r => r.json() as Promise<{ fields: Record<string, SearchResult[]>; ms: number }>)
+            .then(({ fields, ms }) => {
+              const results = fields[field] ?? []
+              fieldResults[field] = results
+              setResults(prev => {
+                const existingIds = new Set(prev.map(r => `${r.groupId}|${r.region}|${r.environment}`))
+                const fresh = results.filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
+                return [...prev, ...fresh]
+              })
+              setFieldStatus(prev => ({
+                ...prev,
+                [field]: { state: 'done', count: results.length, ms, limit: maxResults },
+              }))
+            })
+        })
 
-        // Deduplicate across fields
+        await Promise.all(fieldPromises)
+
+        // Deduplicate final results
         const seen = new Set<string>()
         const finalResults = Object.values(fieldResults).flat().filter(r => {
           const key = `${r.groupId}|${r.region}|${r.environment}`
@@ -782,7 +792,6 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
           seen.add(key)
           return true
         })
-        setResults(finalResults)
         setTotal(finalResults.length)
         setQueryMs(Math.round(performance.now() - t0))
 
