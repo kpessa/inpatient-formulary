@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogPortal, DialogOverlay, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import type { DomainValue } from '@/lib/formulary-diff'
 
@@ -86,7 +87,9 @@ export function TaskCreateDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="rounded-none border-2 border-[#808080] bg-[#D4D0C8] p-0 font-mono shadow-[4px_4px_0_#000] max-w-sm">
+      <DialogPortal>
+      <DialogOverlay className="fixed inset-0 z-[9000] bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+      <DialogPrimitive.Content className="fixed left-[50%] top-[50%] z-[9000] w-full max-w-sm translate-x-[-50%] translate-y-[-50%] rounded-none border-2 border-[#808080] bg-[#D4D0C8] p-0 font-mono shadow-[4px_4px_0_#000] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]">
         {/* Win95 title bar */}
         <div className="bg-[#316AC5] text-white text-[11px] font-mono font-bold px-2 py-1 flex items-center">
           Add Change Task
@@ -227,7 +230,8 @@ export function TaskCreateDialog({
             {saving ? 'Saving…' : 'Add Task'}
           </button>
         </DialogFooter>
-      </DialogContent>
+      </DialogPrimitive.Content>
+      </DialogPortal>
     </Dialog>
   )
 }
