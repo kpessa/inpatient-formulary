@@ -93,3 +93,57 @@ CREATE TABLE IF NOT EXISTS supply_records (
 
 CREATE INDEX IF NOT EXISTS idx_sr_domain_group ON supply_records(domain, group_id);
 CREATE INDEX IF NOT EXISTS idx_sr_ndc ON supply_records(ndc);
+
+CREATE TABLE IF NOT EXISTS drug_categories (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  color TEXT DEFAULT '#6B7280',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Manual membership (cross-domain: groupId only, no domain)
+CREATE TABLE IF NOT EXISTS category_members (
+  category_id TEXT NOT NULL REFERENCES drug_categories(id) ON DELETE CASCADE,
+  group_id TEXT NOT NULL,
+  drug_description TEXT,             -- denormalized for display
+  added_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (category_id, group_id)
+);
+
+-- Explicit Pyxis ID list per category (drives SearchModal category search)
+CREATE TABLE IF NOT EXISTS category_pyxis_ids (
+  category_id TEXT NOT NULL REFERENCES drug_categories(id) ON DELETE CASCADE,
+  pyxis_id    TEXT NOT NULL,
+  added_at    TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (category_id, pyxis_id)
+);
+
+-- Rule-based membership (dynamic; evaluated at query time)
+CREATE TABLE IF NOT EXISTS category_rules (
+  id TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL REFERENCES drug_categories(id) ON DELETE CASCADE,
+  field TEXT NOT NULL,               -- 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'status' | 'strength'
+  operator TEXT NOT NULL CHECK (operator IN ('equals','contains','starts_with','ends_with')),
+  value TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Search filter groups (dosage form / route / dispense category groupings for advanced search)
+-- Populated via Category Manager → Filter Groups tab. Run scripts/migrate_filter_columns.ts first.
+CREATE TABLE IF NOT EXISTS search_filter_groups (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  icon        TEXT NOT NULL DEFAULT '',
+  field       TEXT NOT NULL,                -- 'dosage_form' | 'route' | 'dispense_category'
+  values_json TEXT NOT NULL DEFAULT '[]',   -- JSON array of exact column values
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT DEFAULT (datetime('now'))
+);
+
+-- Denormalized columns extracted from JSON blobs (added via scripts/migrate_filter_columns.ts)
+-- ALTER TABLE formulary_groups ADD COLUMN route TEXT NOT NULL DEFAULT '';
+-- ALTER TABLE formulary_groups ADD COLUMN dispense_category TEXT NOT NULL DEFAULT '';
+-- CREATE INDEX IF NOT EXISTS idx_fg_dosage_form      ON formulary_groups(dosage_form);
+-- CREATE INDEX IF NOT EXISTS idx_fg_route            ON formulary_groups(route);
+-- CREATE INDEX IF NOT EXISTS idx_fg_dispense_cat     ON formulary_groups(dispense_category);

@@ -11,10 +11,13 @@ import { IdentifiersTab } from "@/components/formulary/IdentifiersTab"
 import { FormularyHeader } from "@/components/formulary/FormularyHeader"
 import { SearchModal } from "@/components/formulary/SearchModal"
 import { ImportModal } from "@/components/formulary/ImportModal"
+import { TaskBar } from "@/components/TaskBar"
+import type { WindowId } from "@/components/TaskBar"
 import { RecentSearchDropdown } from "@/components/formulary/RecentSearchDropdown"
 import { TaskPanel } from "@/components/formulary/TaskPanel"
 import { TaskCreateDialog } from "@/components/formulary/TaskCreateDialog"
 import { BuildChecklist } from "@/components/formulary/BuildChecklist"
+import { CategoryManager } from "@/components/formulary/CategoryManager"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,7 +72,7 @@ const TOOLBAR_ICONS = [
 
 function ToolbarIcon({ children }: { children: React.ReactNode }) {
   return (
-    <button className="w-6 h-6 flex items-center justify-center border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs leading-none">
+    <button className="w-6 h-6 flex items-center justify-center border border-[#808080] bg-[#D4D0C8] text-xs leading-none opacity-50 pointer-events-none cursor-not-allowed">
       {children}
     </button>
   )
@@ -90,6 +93,19 @@ export default function PharmNetFormulary() {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
   const [isBuildOpen, setIsBuildOpen] = useState(false)
+  const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false)
+
+  // Window manager
+  const [focusedWindow, setFocusedWindow] = useState<WindowId>('formulary')
+  const [minimizedWindows, setMinimizedWindows] = useState<Set<WindowId>>(new Set())
+  const focusWindow = (id: WindowId) => {
+    setFocusedWindow(id)
+    setMinimizedWindows(prev => { const s = new Set(prev); s.delete(id); return s })
+  }
+  const minimizeWindow = (id: WindowId) => {
+    setMinimizedWindows(prev => new Set([...prev, id]))
+    setFocusedWindow('formulary')
+  }
   const [selectedItemPreview, setSelectedItemPreview] = useState<FormularyItem | null>(null)
   const [domainItems, setDomainItems] = useState<Record<string, FormularyItem | null>>({})
   const [domainLoading, setDomainLoading] = useState<Record<string, boolean>>({})
@@ -282,6 +298,7 @@ export default function PharmNetFormulary() {
 
   const openSearch = (query?: string) => {
     setIsSearchModalOpen(true)
+    focusWindow('search')
     if (query?.trim()) {
       const trimmed = query.trim()
       setRecentSearches(prev => {
@@ -306,10 +323,11 @@ export default function PharmNetFormulary() {
   }
 
   return (
-    <div className="min-h-screen bg-[#808080] overflow-hidden">
+    <div className="min-h-screen bg-[#808080] overflow-hidden pb-8">
       <div
-        className="absolute flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-2xl border border-white border-r-[#808080] border-b-[#808080]"
-        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        className="fixed flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-2xl border border-white border-r-[#808080] border-b-[#808080]"
+        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex: focusedWindow === 'formulary' ? 51 : 50, display: minimizedWindows.has('formulary') ? 'none' : undefined }}
+        onPointerDownCapture={() => setFocusedWindow('formulary')}
       >
         {/* Resize Handles */}
         <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
@@ -323,7 +341,7 @@ export default function PharmNetFormulary() {
 
         {/* Title bar */}
         <div
-          className="flex items-center justify-between bg-[#C85A00] text-white px-2 h-7 shrink-0 cursor-default"
+          className={`flex items-center justify-between text-white px-2 h-7 shrink-0 cursor-default transition-colors duration-150 ${focusedWindow === 'formulary' ? 'bg-[#C85A00]' : 'bg-[#7A3A00]'}`}
           onPointerDown={handlePointerDown('move')}
         >
           <div className="flex items-center gap-1.5 pointer-events-none">
@@ -332,9 +350,9 @@ export default function PharmNetFormulary() {
           <span className="text-sm font-bold font-mono tracking-tight">PharmNet Inpatient Formulary Manager</span>
         </div>
         <div className="flex gap-1" onPointerDown={e => e.stopPropagation()}>
-          <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
-          <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">□</button>
-          <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">✕</button>
+          <button onPointerDown={e => { e.stopPropagation(); minimizeWindow('formulary') }} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
+          <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none opacity-50 pointer-events-none cursor-not-allowed">□</button>
+          <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none opacity-50 pointer-events-none cursor-not-allowed">✕</button>
         </div>
       </div>
 
@@ -366,7 +384,7 @@ export default function PharmNetFormulary() {
           </DropdownMenuContent>
         </DropdownMenu>
         {["Edit", "View", "Help"].map((item) => (
-          <button key={item} className="text-xs font-mono px-1 hover:bg-[#316AC5] hover:text-white">
+          <button key={item} className="text-xs font-mono px-1 opacity-50 pointer-events-none cursor-not-allowed">
             {item}
           </button>
         ))}
@@ -374,29 +392,15 @@ export default function PharmNetFormulary() {
 
       {/* Toolbar */}
       <div className="flex items-center gap-1 bg-[#D4D0C8] px-2 py-1 border-b border-[#808080] shrink-0">
-        <div className="flex gap-0.5 mr-1">
-          {[..."📄💾✂️📋"].map((icon, i) => (
-            <ToolbarIcon key={i}>{icon}</ToolbarIcon>
-          ))}
-        </div>
-        <div className="w-px h-5 bg-[#808080] mx-0.5" />
-        <div className="flex gap-0.5 mr-1">
-          {[..."🔍⚡"].map((icon, i) => (
-            <ToolbarIcon key={i}>{icon}</ToolbarIcon>
-          ))}
-        </div>
-        <div className="w-px h-5 bg-[#808080] mx-0.5" />
-        <div className="flex gap-0.5 mr-1">
-          {[..."📊📋📦🏷️🔧📊"].map((icon, i) => (
-            <ToolbarIcon key={i}>{icon}</ToolbarIcon>
-          ))}
-        </div>
-        <div className="w-px h-5 bg-[#808080] mx-0.5" />
-        <div className="flex gap-0.5">
-          {["⬛"].map((icon, i) => (
-            <ToolbarIcon key={i}>{icon}</ToolbarIcon>
-          ))}
-        </div>
+        {/* Category Manager button */}
+        <button
+          onClick={() => { setIsCategoryManagerOpen(true); focusWindow('categories') }}
+          className="text-[10px] font-mono px-1.5 h-5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] flex items-center gap-0.5 ml-1"
+          title="Category Manager"
+        >
+          🏷 Categories
+        </button>
+
         {/* Search area */}
         <div className="flex items-center gap-1 ml-auto">
           <span className="text-xs font-mono">Search for:</span>
@@ -410,16 +414,14 @@ export default function PharmNetFormulary() {
               }}
               className="h-5 text-xs font-mono rounded-none border-[#808080] px-1 py-0 w-40 bg-white"
             />
-            {searchValue && (
-              <button
-                onClick={() => setSearchValue("")}
-                className="h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default"
-                title="Clear search (Esc)"
-                tabIndex={-1}
-              >
-                ✕
-              </button>
-            )}
+            <button
+              onClick={() => setSearchValue("")}
+              className={`h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default ${searchValue ? '' : 'invisible pointer-events-none'}`}
+              title="Clear search (Esc)"
+              tabIndex={-1}
+            >
+              ✕
+            </button>
             <RecentSearchDropdown
               recentSearches={recentSearches}
               onSelect={s => {
@@ -614,17 +616,22 @@ export default function PharmNetFormulary() {
           <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{timeStr}</span>
         </div>
       </div>
+    </div>
 
       <SearchModal
-        hidden={!isSearchModalOpen}
+        hidden={!isSearchModalOpen || minimizedWindows.has('search')}
+        focused={focusedWindow === 'search' && !minimizedWindows.has('search')}
+        onFocus={() => focusWindow('search')}
+        onMinimize={() => minimizeWindow('search')}
         searchTrigger={searchTrigger}
         scope={scope}
         availableDomains={availableDomains}
-        onClose={() => setIsSearchModalOpen(false)}
+        onClose={() => { setIsSearchModalOpen(false); if (focusedWindow === 'search') setFocusedWindow('formulary') }}
         onCreateTask={handleCreateTaskFromSearch}
         onSelect={(item) => {
           setSelectedItemPreview(item)
           setIsSearchModalOpen(false)
+          setFocusedWindow('formulary')
           setPendingTaskCount(0)
           setIsTaskPanelOpen(false)
 
@@ -670,7 +677,39 @@ export default function PharmNetFormulary() {
           onClose={() => setIsBuildOpen(false)}
         />
       )}
-    </div>
+
+      {/* Category Manager */}
+      <CategoryManager
+        open={isCategoryManagerOpen}
+        minimized={minimizedWindows.has('categories')}
+        focused={focusedWindow === 'categories' && !minimizedWindows.has('categories')}
+        onFocus={() => focusWindow('categories')}
+        onMinimize={() => minimizeWindow('categories')}
+        onClose={() => { setIsCategoryManagerOpen(false); if (focusedWindow === 'categories') setFocusedWindow('formulary') }}
+      />
+
+    {/* Windows 95 Taskbar */}
+    <TaskBar
+      openWindows={new Set<WindowId>([
+        'formulary',
+        ...(isSearchModalOpen ? ['search' as WindowId] : []),
+        ...(isCategoryManagerOpen ? ['categories' as WindowId] : []),
+      ])}
+      minimizedWindows={minimizedWindows}
+      focusedWindow={focusedWindow}
+      isTaskPanelOpen={isTaskPanelOpen}
+      onFocusWindow={(id) => {
+        if (id === 'formulary') focusWindow('formulary')
+        else if (id === 'search' && isSearchModalOpen) focusWindow('search')
+        else if (id === 'categories' && isCategoryManagerOpen) focusWindow('categories')
+      }}
+      onStartMenuAction={(id) => {
+        if (id === 'formulary') focusWindow('formulary')
+        else if (id === 'search') { setIsSearchModalOpen(true); focusWindow('search') }
+        else if (id === 'categories') { setIsCategoryManagerOpen(true); focusWindow('categories') }
+        else if (id === 'tasks') setIsTaskPanelOpen(v => !v)
+      }}
+    />
     </div>
   )
 }

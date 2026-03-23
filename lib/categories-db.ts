@@ -1,0 +1,331 @@
+import { randomUUID } from 'crypto'
+import { getDb } from './db'
+import type { DrugCategory, CategoryRule, CategoryMember } from './types'
+import type { Row } from '@libsql/client'
+import { tcDescendants } from './therapeutic-class-map'
+
+function rowToCategory(r: Row, manualCount = 0, ruleCount = 0): DrugCategory {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    description: (r.description as string | null) ?? '',
+    color: (r.color as string | null) ?? '#6B7280',
+    manualCount,
+    ruleCount,
+    totalCount: manualCount,
+  }
+}
+
+function rowToRule(r: Row): CategoryRule {
+  return {
+    id: r.id as string,
+    categoryId: r.category_id as string,
+    field: r.field as CategoryRule['field'],
+    operator: r.operator as CategoryRule['operator'],
+    value: r.value as string,
+  }
+}
+
+function fieldToSqlExpression(field: string): string {
+  switch (field) {
+    case 'dispenseCategory': return "json_extract(dispense_json, '$.dispenseCategory')"
+    case 'therapeuticClass': return "json_extract(clinical_json, '$.therapeuticClass')"
+    case 'dosageForm':       return 'dosage_form'
+    case 'status':           return 'status'
+    case 'strength':         return 'strength'
+    default:                 return 'NULL'
+  }
+}
+
+function buildRuleClause(
+  field: string,
+  operator: string,
+  value: string,
+): { clause: string; args: string[] } {
+  if (field === 'therapeuticClass' && operator === 'equals') {
+    const codes = [value, ...tcDescendants(value)]
+    if (codes.length === 1) return { clause: '= ?', args: [value] }
+    return { clause: `IN (${codes.map(() => '?').join(',')})`, args: codes }
+  }
+  switch (operator) {
+    case 'equals':      return { clause: '= ?',    args: [value] }
+    case 'contains':    return { clause: 'LIKE ?',  args: [`%${value}%`] }
+    case 'starts_with': return { clause: 'LIKE ?',  args: [`${value}%`] }
+    case 'ends_with':   return { clause: 'LIKE ?',  args: [`%${value}`] }
+    default:            return { clause: '= ?',     args: [value] }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Categories
+// ---------------------------------------------------------------------------
+
+export async function listCategories(): Promise<DrugCategory[]> {
+  const db = getDb()
+  const { rows } = await db.execute(`
+    SELECT
+      dc.id, dc.name, dc.description, dc.color, dc.created_at,
+      COUNT(DISTINCT cm.group_id) AS manual_count,
+      COUNT(DISTINCT cr.id) AS rule_count
+    FROM drug_categories dc
+    LEFT JOIN category_members cm ON cm.category_id = dc.id
+    LEFT JOIN category_rules cr ON cr.category_id = dc.id
+    GROUP BY dc.id
+    ORDER BY dc.name
+  `)
+  return rows.map(r =>
+    rowToCategory(r, Number(r.manual_count), Number(r.rule_count))
+  )
+}
+
+export async function createCategory(
+  name: string,
+  description: string,
+  color: string,
+): Promise<DrugCategory> {
+  const db = getDb()
+  const id = randomUUID()
+  await db.execute({
+    sql: `INSERT INTO drug_categories (id, name, description, color) VALUES (?, ?, ?, ?)`,
+    args: [id, name, description, color],
+  })
+  return { id, name, description, color, manualCount: 0, ruleCount: 0, totalCount: 0 }
+}
+
+export async function updateCategory(
+  id: string,
+  fields: Partial<Pick<DrugCategory, 'name' | 'description' | 'color'>>,
+): Promise<void> {
+  const db = getDb()
+  const sets: string[] = []
+  const args: (string | null)[] = []
+  if (fields.name        !== undefined) { sets.push('name = ?');        args.push(fields.name) }
+  if (fields.description !== undefined) { sets.push('description = ?'); args.push(fields.description) }
+  if (fields.color       !== undefined) { sets.push('color = ?');       args.push(fields.color) }
+  if (sets.length === 0) return
+  args.push(id)
+  await db.execute({ sql: `UPDATE drug_categories SET ${sets.join(', ')} WHERE id = ?`, args })
+}
+
+export async function deleteCategory(id: string): Promise<void> {
+  const db = getDb()
+  await db.execute({ sql: 'DELETE FROM drug_categories WHERE id = ?', args: [id] })
+}
+
+export async function getCategoryWithRules(
+  id: string,
+): Promise<{ category: DrugCategory; rules: CategoryRule[] } | null> {
+  const db = getDb()
+  const [{ rows: catRows }, { rows: ruleRows }, { rows: cntRows }] = await db.batch([
+    { sql: 'SELECT * FROM drug_categories WHERE id = ?', args: [id] },
+    { sql: 'SELECT * FROM category_rules WHERE category_id = ? ORDER BY created_at', args: [id] },
+    { sql: 'SELECT COUNT(DISTINCT group_id) AS cnt FROM category_members WHERE category_id = ?', args: [id] },
+  ], 'read')
+  if (catRows.length === 0) return null
+  const manualCount = Number(cntRows[0].cnt)
+  return {
+    category: rowToCategory(catRows[0], manualCount, ruleRows.length),
+    rules: ruleRows.map(rowToRule),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Members
+// ---------------------------------------------------------------------------
+
+export async function addManualMember(
+  categoryId: string,
+  groupId: string,
+  drugDescription: string,
+): Promise<void> {
+  const db = getDb()
+  await db.execute({
+    sql: `INSERT OR REPLACE INTO category_members (category_id, group_id, drug_description) VALUES (?, ?, ?)`,
+    args: [categoryId, groupId, drugDescription],
+  })
+}
+
+export async function removeManualMember(categoryId: string, groupId: string): Promise<void> {
+  const db = getDb()
+  await db.execute({
+    sql: 'DELETE FROM category_members WHERE category_id = ? AND group_id = ?',
+    args: [categoryId, groupId],
+  })
+}
+
+export async function resolveCategoryMembers(categoryId: string): Promise<CategoryMember[]> {
+  const db = getDb()
+
+  const [{ rows: manualRows }, { rows: ruleRows }] = await db.batch([
+    { sql: 'SELECT group_id, drug_description FROM category_members WHERE category_id = ?', args: [categoryId] },
+    { sql: 'SELECT * FROM category_rules WHERE category_id = ?', args: [categoryId] },
+  ], 'read')
+
+  const seen = new Set<string>()
+  const results: CategoryMember[] = []
+
+  for (const r of manualRows) {
+    const groupId = r.group_id as string
+    seen.add(groupId)
+    results.push({ groupId, drugDescription: (r.drug_description as string | null) ?? '', source: 'manual' })
+  }
+
+  for (const rule of ruleRows) {
+    const fieldExpr = fieldToSqlExpression(rule.field as string)
+    const { clause, args: ruleArgs } = buildRuleClause(rule.field as string, rule.operator as string, rule.value as string)
+    const ruleId = rule.id as string
+
+    const { rows } = await db.execute({
+      sql: `SELECT DISTINCT group_id, description FROM formulary_groups WHERE ${fieldExpr} ${clause}`,
+      args: [...ruleArgs],
+    })
+    for (const r of rows) {
+      const groupId = r.group_id as string
+      if (!seen.has(groupId)) {
+        seen.add(groupId)
+        results.push({ groupId, drugDescription: r.description as string, source: 'rule', ruleId })
+      }
+    }
+  }
+
+  return results
+}
+
+// ---------------------------------------------------------------------------
+// Rules
+// ---------------------------------------------------------------------------
+
+export async function addRule(
+  categoryId: string,
+  field: CategoryRule['field'],
+  operator: CategoryRule['operator'],
+  value: string,
+): Promise<CategoryRule> {
+  const db = getDb()
+  const id = randomUUID()
+  await db.execute({
+    sql: `INSERT INTO category_rules (id, category_id, field, operator, value) VALUES (?, ?, ?, ?, ?)`,
+    args: [id, categoryId, field, operator, value],
+  })
+  return { id, categoryId, field, operator, value }
+}
+
+export async function removeRule(ruleId: string): Promise<void> {
+  const db = getDb()
+  await db.execute({ sql: 'DELETE FROM category_rules WHERE id = ?', args: [ruleId] })
+}
+
+// ---------------------------------------------------------------------------
+// Pyxis ID lists
+// ---------------------------------------------------------------------------
+
+export async function getCategoryPyxisIds(categoryId: string): Promise<string[]> {
+  const db = getDb()
+  const { rows } = await db.execute({
+    sql: 'SELECT pyxis_id FROM category_pyxis_ids WHERE category_id = ? ORDER BY added_at',
+    args: [categoryId],
+  })
+  return rows.map(r => r.pyxis_id as string)
+}
+
+export async function addCategoryPyxisId(categoryId: string, pyxisId: string): Promise<void> {
+  const db = getDb()
+  await db.execute({
+    sql: 'INSERT OR IGNORE INTO category_pyxis_ids (category_id, pyxis_id) VALUES (?, ?)',
+    args: [categoryId, pyxisId.trim()],
+  })
+}
+
+export async function removeCategoryPyxisId(categoryId: string, pyxisId: string): Promise<void> {
+  const db = getDb()
+  await db.execute({
+    sql: 'DELETE FROM category_pyxis_ids WHERE category_id = ? AND pyxis_id = ?',
+    args: [categoryId, pyxisId],
+  })
+}
+
+// Resolve all rules for a category, look up pyxis_id for each matched group, and
+// bulk-insert the results into category_pyxis_ids. Returns the count of newly added IDs.
+export async function populatePyxisIdsFromRules(categoryId: string): Promise<number> {
+  const db = getDb()
+  const { rows: ruleRows } = await db.execute({
+    sql: 'SELECT field, operator, value FROM category_rules WHERE category_id = ?',
+    args: [categoryId],
+  })
+  if (ruleRows.length === 0) return 0
+
+  const seen = new Set<string>()
+  for (const rule of ruleRows) {
+    const fieldExpr = fieldToSqlExpression(rule.field as string)
+    const { clause, args: ruleArgs } = buildRuleClause(rule.field as string, rule.operator as string, rule.value as string)
+    const { rows } = await db.execute({
+      sql: `SELECT DISTINCT pyxis_id FROM formulary_groups WHERE pyxis_id != '' AND ${fieldExpr} ${clause}`,
+      args: [...ruleArgs],
+    })
+    for (const r of rows) seen.add(r.pyxis_id as string)
+  }
+
+  if (seen.size === 0) return 0
+  // Bulk-insert using individual INSERT OR IGNORE statements in a batch
+  const stmts = [...seen].map(pid => ({
+    sql: 'INSERT OR IGNORE INTO category_pyxis_ids (category_id, pyxis_id) VALUES (?, ?)',
+    args: [categoryId, pid],
+  }))
+  await db.batch(stmts, 'write')
+  return seen.size
+}
+
+export async function getGroupIdCategories(
+  groupIds: string[]
+): Promise<Record<string, { id: string; name: string; color: string }[]>> {
+  if (groupIds.length === 0) return {}
+  const db = getDb()
+  const result: Record<string, { id: string; name: string; color: string }[]> = {}
+  const placeholders = groupIds.map(() => '?').join(',')
+
+  const addMatch = (groupId: string, cat: { id: string; name: string; color: string }) => {
+    if (!result[groupId]) result[groupId] = []
+    if (!result[groupId].some(c => c.id === cat.id)) result[groupId].push(cat)
+  }
+
+  // Manual membership
+  const { rows: manualRows } = await db.execute({
+    sql: `SELECT cm.group_id, dc.id AS category_id, dc.name, dc.color
+          FROM category_members cm
+          JOIN drug_categories dc ON dc.id = cm.category_id
+          WHERE cm.group_id IN (${placeholders})`,
+    args: groupIds,
+  })
+  for (const r of manualRows) {
+    addMatch(r.group_id as string, {
+      id: r.category_id as string,
+      name: r.name as string,
+      color: (r.color as string | null) ?? '#6B7280',
+    })
+  }
+
+  // Rule-based membership — one query per rule, filtered to our groupIds
+  const { rows: ruleRows } = await db.execute(`
+    SELECT cr.field, cr.operator, cr.value,
+           dc.id AS category_id, dc.name, dc.color
+    FROM category_rules cr
+    JOIN drug_categories dc ON dc.id = cr.category_id
+  `)
+  for (const rule of ruleRows) {
+    const fieldExpr = fieldToSqlExpression(rule.field as string)
+    const { clause, args: ruleArgs } = buildRuleClause(rule.field as string, rule.operator as string, rule.value as string)
+    const cat = {
+      id: rule.category_id as string,
+      name: rule.name as string,
+      color: (rule.color as string | null) ?? '#6B7280',
+    }
+    const { rows: matched } = await db.execute({
+      sql: `SELECT DISTINCT group_id FROM formulary_groups
+            WHERE group_id IN (${placeholders}) AND ${fieldExpr} ${clause}`,
+      args: [...groupIds, ...ruleArgs],
+    })
+    for (const m of matched) addMatch(m.group_id as string, cat)
+  }
+
+  return result
+}

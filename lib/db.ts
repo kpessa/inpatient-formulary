@@ -47,6 +47,17 @@ export interface SearchResult {
   searchIntermittent: boolean
 }
 
+export interface AdvancedFilters {
+  dosageFormInclude?: string[]            // exact dosage_form values; OR'd with IN(...)
+  dosageFormExclude?: string[]            // NOT IN(...)
+  therapeuticClassCodes?: string[]        // [code, ...descendants]; IN(...)
+  therapeuticClassExcludeCodes?: string[] // [code, ...descendants]; NOT IN(...)
+  dispenseCategoryInclude?: string[]      // exact dispense_category values; IN(...)
+  dispenseCategoryExclude?: string[]      // NOT IN(...)
+  routeInclude?: string[]                 // exact route values; IN(...)
+  routeExclude?: string[]                 // NOT IN(...)
+}
+
 export interface SearchParams {
   q: string
   limit: number
@@ -55,6 +66,7 @@ export interface SearchParams {
   showInactive: boolean
   facilities?: string | null
   colFilters?: Record<string, { text?: string; vals?: string[] }>
+  advancedFilters?: AdvancedFilters
 }
 
 // Maps SearchModal column IDs to their DB column names for server-side filtering.
@@ -68,6 +80,45 @@ const COL_DB: Record<string, string> = {
   brand:       'brand_name',
 }
 
+function buildAdvancedClauses(
+  adv: AdvancedFilters,
+  conditions: string[],
+  sqlArgs: (string | number)[],
+) {
+  if (adv.dosageFormInclude?.length) {
+    conditions.push(`dosage_form IN (${adv.dosageFormInclude.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.dosageFormInclude)
+  }
+  if (adv.dosageFormExclude?.length) {
+    conditions.push(`dosage_form NOT IN (${adv.dosageFormExclude.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.dosageFormExclude)
+  }
+  if (adv.therapeuticClassCodes?.length) {
+    conditions.push(`json_extract(clinical_json, '$.therapeuticClass') IN (${adv.therapeuticClassCodes.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.therapeuticClassCodes)
+  }
+  if (adv.therapeuticClassExcludeCodes?.length) {
+    conditions.push(`json_extract(clinical_json, '$.therapeuticClass') NOT IN (${adv.therapeuticClassExcludeCodes.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.therapeuticClassExcludeCodes)
+  }
+  if (adv.dispenseCategoryInclude?.length) {
+    conditions.push(`dispense_category IN (${adv.dispenseCategoryInclude.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.dispenseCategoryInclude)
+  }
+  if (adv.dispenseCategoryExclude?.length) {
+    conditions.push(`dispense_category NOT IN (${adv.dispenseCategoryExclude.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.dispenseCategoryExclude)
+  }
+  if (adv.routeInclude?.length) {
+    conditions.push(`route IN (${adv.routeInclude.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.routeInclude)
+  }
+  if (adv.routeExclude?.length) {
+    conditions.push(`route NOT IN (${adv.routeExclude.map(() => '?').join(',')})`)
+    sqlArgs.push(...adv.routeExclude)
+  }
+}
+
 export async function searchFormulary({
   q,
   limit,
@@ -76,6 +127,7 @@ export async function searchFormulary({
   showInactive,
   facilities,
   colFilters,
+  advancedFilters,
   onCount,
 }: SearchParams & { onCount?: (n: number) => void }): Promise<{ results: SearchResult[]; total: number }> {
   const db = getDb()
@@ -145,6 +197,8 @@ export async function searchFormulary({
       for (let i = 0; i < 8; i++) sqlArgs.push(sub)
     }
   }
+
+  if (advancedFilters) buildAdvancedClauses(advancedFilters, conditions, sqlArgs)
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
@@ -232,6 +286,30 @@ function mapRow(row: Row): SearchResult {
     searchContinuous: false,
     searchIntermittent: false,
   }
+}
+
+export async function searchByPyxisIds(
+  pyxisIds: string[],
+  region?: string,
+  environment?: string,
+): Promise<SearchResult[]> {
+  if (pyxisIds.length === 0) return []
+  const db = getDb()
+  const placeholders = pyxisIds.map(() => '?').join(',')
+  const conditions: string[] = [`pyxis_id IN (${placeholders})`]
+  const args: (string | number)[] = [...pyxisIds]
+  if (region)      { conditions.push('region = ?');      args.push(region) }
+  if (environment) { conditions.push('environment = ?'); args.push(environment) }
+  const { rows } = await db.execute({
+    sql: `SELECT group_id, description, generic_name, strength, strength_unit,
+                 dosage_form, mnemonic, status, charge_number, brand_name,
+                 formulary_status, pyxis_id, region, environment
+          FROM formulary_groups
+          WHERE ${conditions.join(' AND ')}
+          ORDER BY description`,
+    args,
+  })
+  return rows.map(mapRow)
 }
 
 export interface FieldSearchParams {

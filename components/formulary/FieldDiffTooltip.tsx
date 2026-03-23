@@ -1,5 +1,6 @@
 'use client'
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import type { DomainValue } from '@/lib/formulary-diff'
 
 // Finds common prefix/suffix and marks the middle segment as changed
@@ -29,20 +30,30 @@ interface Props {
 
 export function FieldDiffTooltip({ values, fieldName, fieldLabel, onCreateTask, style, className, children }: Props) {
   const [show, setShow] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null)
   if (!values?.length) return <div style={style} className={className}>{children}</div>
 
   const baseValue = values[0].value
 
   return (
     <div
+      ref={wrapRef}
       style={style}
       className={`relative ${className ?? ''}`}
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={() => {
+        const r = wrapRef.current?.getBoundingClientRect()
+        if (r) setPos({ left: r.left, bottom: window.innerHeight - r.top })
+        setShow(true)
+      }}
+      onMouseLeave={() => { setShow(false); setPos(null) }}
     >
       {children}
-      {show && (
-        <div className="absolute z-[200] bottom-full left-0 mb-px min-w-[200px] w-max bg-white border border-[#808080] shadow-[2px_2px_0px_#000000]">
+      {show && createPortal(
+        <div
+          className="fixed z-[9000] min-w-[200px] w-max bg-white border border-[#808080] shadow-[2px_2px_0px_#000000]"
+          style={pos ? { left: pos.left, bottom: pos.bottom + 2 } : undefined}
+        >
           {/* Win95 title bar */}
           <div className="bg-[#316AC5] text-white text-[9px] font-mono font-bold px-1.5 py-0.5 flex items-center justify-between gap-2">
             <span>Domain Values</span>
@@ -86,7 +97,8 @@ export function FieldDiffTooltip({ values, fieldName, fieldLabel, onCreateTask, 
               )
             })}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

@@ -18,13 +18,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import type { FormularyItem } from "@/lib/types"
+import type { FormularyItem, DrugCategory, SearchFilterGroup } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
 import type { DomainValue } from "@/lib/formulary-diff"
 import { CompareModal } from "./CompareModal"
 import { RecentSearchDropdown } from "./RecentSearchDropdown"
+import { TherapeuticClassPicker } from "./TherapeuticClassPicker"
+import { tcDescendants, tcLabel } from "@/lib/therapeutic-class-map"
+import { FieldFilterSelect, FilterChips, type AdvFilterItem } from "./FieldFilterSelect"
+import { FieldDiffTooltip } from "./FieldDiffTooltip"
 
 type UnifiedResult = SearchResult & { _allDomains: string[] }
+
+type CategoryInfo = { id: string; name: string; color: string }
 
 type Scope =
   | { type: 'all' }
@@ -43,6 +49,9 @@ function scopeLabel(scope: Scope): string {
 
 interface SearchModalProps {
   onClose: () => void
+  onMinimize?: () => void
+  onFocus?: () => void
+  focused?: boolean
   hidden?: boolean
   searchTrigger?: { value: string; seq: number } | null
   scope: Scope
@@ -174,7 +183,7 @@ function classifyActiveFields(q: string, activeFields: Set<string>): Set<string>
   return new Set(candidates.filter(f => activeFields.has(f)))
 }
 
-export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask }: SearchModalProps) {
+export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState("")
   const [scope, setScope] = useState<Scope>(initialScope)
@@ -212,6 +221,12 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
 
   const [detailsLoading, setDetailsLoading] = useState(false)
 
+  const [groupCategories, setGroupCategories] = useState<Record<string, CategoryInfo[]>>({})
+  const [categoriesLoading, setCategoriesLoading] = useState(false)
+  const [allCategories, setAllCategories] = useState<CategoryInfo[]>([])
+  const [categoryFilter, setCategoryFilter] = useState<string>('')
+  const [categorySearchActive, setCategorySearchActive] = useState(false)
+
   // Phase 2: fetch activeFacilities + searchMedication/Continuous/Intermittent.
   // Called via setTimeout after the fast results render so the UI updates in two
   // distinct phases. The gen parameter guards against stale calls from prior searches.
@@ -227,12 +242,17 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
         if (!domainGroups.has(key)) domainGroups.set(key, { groupIds: [], region: r.region, environment: r.environment })
         domainGroups.get(key)!.groupIds.push(r.groupId)
       }
-      const fetches = [...domainGroups.values()].map(async ({ groupIds, region, environment }) => {
-        const params = new URLSearchParams({ groupIds: groupIds.join(','), region, environment })
-        const res = await fetch(`/api/formulary/inventory?${params}`)
-        if (!res.ok) throw new Error(`inventory ${res.status}`)
-        const data = await res.json() as Record<string, { activeFacilities: string[]; searchMedication: boolean; searchContinuous: boolean; searchIntermittent: boolean }>
-        return { data, region, environment }
+      const CHUNK = 50
+      const fetches = [...domainGroups.values()].flatMap(({ groupIds, region, environment }) => {
+        const chunks: string[][] = []
+        for (let i = 0; i < groupIds.length; i += CHUNK) chunks.push(groupIds.slice(i, i + CHUNK))
+        return chunks.map(async chunk => {
+          const params = new URLSearchParams({ groupIds: chunk.join(','), region, environment })
+          const res = await fetch(`/api/formulary/inventory?${params}`)
+          if (!res.ok) throw new Error(`inventory ${res.status}`)
+          const data = await res.json() as Record<string, { activeFacilities: string[]; searchMedication: boolean; searchContinuous: boolean; searchIntermittent: boolean }>
+          return { data, region, environment }
+        })
       })
       const detailResults = await Promise.all(fetches)
       if (searchGenRef.current !== gen) return  // new search started while fetching — bail
@@ -253,6 +273,77 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
     }
   }
 
+  const loadCategories = async (items: SearchResult[], gen: number) => {
+    if (items.length === 0) { setGroupCategories({}); return }
+    if (searchGenRef.current !== gen) return
+    setCategoriesLoading(true)
+    try {
+      const uniqueIds = [...new Set(items.map(r => r.groupId))].slice(0, 200)
+      const res = await fetch(`/api/categories/membership?groupIds=${uniqueIds.join(',')}`)
+      if (!res.ok) throw new Error(`membership ${res.status}`)
+      const data = await res.json() as Record<string, CategoryInfo[]>
+      if (searchGenRef.current !== gen) return
+      setGroupCategories(data)
+    } catch (err) {
+      console.error('loadCategories failed:', err)
+    } finally {
+      if (searchGenRef.current === gen) setCategoriesLoading(false)
+    }
+  }
+
+  const handleCategorySelect = async (catId: string) => {
+    setCategoryFilter(catId)
+    if (!catId) {
+      setCategorySearchActive(false)
+      setResults([])
+      setTotal(0)
+      setGroupCategories({})
+      return
+    }
+    const { pyxisIds } = await fetch(`/api/categories/${catId}/pyxis-ids`).then(r => r.json()) as { pyxisIds: string[] }
+    setCategorySearchActive(true)
+    const gen = ++searchGenRef.current
+    setResults([])
+    setGroupCategories({})
+    setTotal(0)
+    setQueryMs(null)
+    if (pyxisIds.length === 0) return
+    setIsLoading(true)
+    const params = new URLSearchParams({ pyxisIds: pyxisIds.join(',') })
+    if (scope.type === 'domain') { params.set('region', scope.region); params.set('environment', scope.env) }
+    else if (scope.type === 'region') params.set('region', scope.region)
+    else if (scope.type === 'env') params.set('environment', scope.env)
+    const t0 = performance.now()
+    try {
+      const res = await fetch(`/api/formulary/search?${params}`)
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      let finalResults: SearchResult[] = []
+      while (true) {
+        const { done, value } = await reader.read()
+        if (value) buf += decoder.decode(value, { stream: !done })
+        const lines = buf.split('\n')
+        buf = lines.pop()!
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const chunk = JSON.parse(line)
+          if ('results' in chunk) { finalResults = chunk.results; setTotal(chunk.total) }
+        }
+        if (done) break
+      }
+      if (searchGenRef.current !== gen) return
+      setResults(finalResults)
+      setQueryMs(Math.round(performance.now() - t0))
+      setTimeout(() => loadDetails(finalResults, gen), 0)
+      setTimeout(() => loadCategories(finalResults, gen), 0)
+    } catch (err) {
+      console.error('handleCategorySelect failed:', err)
+    } finally {
+      if (searchGenRef.current === gen) setIsLoading(false)
+    }
+  }
+
   // Per-field query status (parallel mode only)
   type FieldStatus = { state: 'loading' | 'done'; count: number; ms: number; limit: number }
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({})
@@ -261,7 +352,8 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
   const [isLoading, setIsLoading] = useState(false)
   const [isExpanding, setIsExpanding] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string; groupId?: string; description?: string } | null>(null)
+  const [catPicker, setCatPicker] = useState<{ x: number; y: number; groupId: string; description: string; categories: DrugCategory[]; selected: Set<string>; saving: boolean } | null>(null)
   const [total, setTotal] = useState(0)
   const [pendingTotal, setPendingTotal] = useState<number | null>(null)
   const [selectedResultIdx, setSelectedResultIdx] = useState<number | null>(null)
@@ -299,6 +391,31 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
   const [filterPanel, setFilterPanel] = useState<{ colId: string; x: number; y: number } | null>(null)
   const [filterPanelSearch, setFilterPanelSearch] = useState("")
   const filterPanelRef = useRef<HTMLDivElement | null>(null)
+
+  // Advanced search panel
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [filterGroups, setFilterGroups] = useState<SearchFilterGroup[]>([])
+  const [advFilter, setAdvFilter] = useState({
+    tcItems: [] as AdvFilterItem[],
+    dfItems: [] as AdvFilterItem[],
+    rtItems: [] as AdvFilterItem[],
+    dcItems: [] as AdvFilterItem[],
+  })
+
+  const fetchFilterGroups = useCallback(() => {
+    fetch('/api/filter-groups')
+      .then(r => r.json())
+      .then((d: { groups: SearchFilterGroup[] }) => setFilterGroups(d.groups ?? []))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => { fetchFilterGroups() }, [fetchFilterGroups])
+
+  const advActiveCount =
+    advFilter.tcItems.length + advFilter.dfItems.length +
+    advFilter.rtItems.length + advFilter.dcItems.length
+
+  const clearAdvFilters = () => setAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
 
   // Advanced tab state
   const [showIvSetFilter, setShowIvSetFilter] = useState(false)
@@ -359,6 +476,16 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
     })
     return () => cancelAnimationFrame(id)
   }, [isMaximized])
+
+  // Load categories list on mount
+  useEffect(() => {
+    fetch('/api/categories')
+      .then(r => r.json())
+      .then((d: { categories: DrugCategory[] }) =>
+        setAllCategories(d.categories.map(c => ({ id: c.id, name: c.name, color: c.color })))
+      )
+      .catch(() => {})
+  }, [])
 
   // Load facilities from DB on mount
   useEffect(() => {
@@ -581,7 +708,7 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
     try {
       const hasFacilityFilter = selectedFacs.length < allFacilities.length
       const isWildcard = query.includes('*')
-      const useParallel = !hasFacilityFilter && !isWildcard && activeFields.size > 0 && trimmed.length > 0
+      const useParallel = !hasFacilityFilter && !isWildcard && activeFields.size > 0 && trimmed.length > 0 && advActiveCount === 0
 
       // Base params shared by both paths
       const baseParams = new URLSearchParams({ q: query, limit: String(maxResults) })
@@ -591,6 +718,24 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
       else if (scope.type === 'region') baseParams.set('region', scope.region)
       else if (scope.type === 'env') baseParams.set('environment', scope.env)
 
+      // Advanced filters
+      const tcInc = advFilter.tcItems.filter(i => i.op === 'include').flatMap(i => [i.id, ...tcDescendants(i.id)])
+      const tcExc = advFilter.tcItems.filter(i => i.op === 'exclude').flatMap(i => [i.id, ...tcDescendants(i.id)])
+      if (tcInc.length) baseParams.set('advTC', [...new Set(tcInc)].join(','))
+      if (tcExc.length) baseParams.set('advTCExclude', [...new Set(tcExc)].join(','))
+      const dfInc = advFilter.dfItems.filter(i => i.op === 'include').flatMap(i => i.values)
+      const dfExc = advFilter.dfItems.filter(i => i.op === 'exclude').flatMap(i => i.values)
+      if (dfInc.length) baseParams.set('advDFInclude', dfInc.join(','))
+      if (dfExc.length) baseParams.set('advDFExclude', dfExc.join(','))
+      const rtInc = advFilter.rtItems.filter(i => i.op === 'include').flatMap(i => i.values)
+      const rtExc = advFilter.rtItems.filter(i => i.op === 'exclude').flatMap(i => i.values)
+      if (rtInc.length) baseParams.set('advRtInclude', rtInc.join(','))
+      if (rtExc.length) baseParams.set('advRtExclude', rtExc.join(','))
+      const dcInc = advFilter.dcItems.filter(i => i.op === 'include').flatMap(i => i.values)
+      const dcExc = advFilter.dcItems.filter(i => i.op === 'exclude').flatMap(i => i.values)
+      if (dcInc.length) baseParams.set('advDCInclude', dcInc.join(','))
+      if (dcExc.length) baseParams.set('advDCExclude', dcExc.join(','))
+
       // For parallel path, classify which fields to actually query based on input format
       const fieldsToQuery = useParallel ? classifyActiveFields(query, activeFields) : new Set<string>()
 
@@ -598,10 +743,12 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
         // ── Parallel path: one fetch per field, results trickle in as each resolves ──
         if (fieldsToQuery.size === 0) {
           setResults([])
+          setGroupCategories({})
           setTotal(0)
           setQueryMs(Math.round(performance.now() - t0))
         } else {
         setResults([])
+        setGroupCategories({})
         setFieldStatus(Object.fromEntries([...fieldsToQuery].map(f =>
           [f, { state: 'loading' as const, count: 0, ms: 0, limit: maxResults }]
         )))
@@ -649,6 +796,7 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
         setQueryMs(Math.round(performance.now() - t0))
 
         setTimeout(() => loadDetails(finalResults, gen), 0)
+        setTimeout(() => loadCategories(finalResults, gen), 0)
         } // end else (fieldsToQuery.size > 0)
       } else {
         // ── Single-query path: NDJSON stream (wildcard / facility filter) ─────
@@ -676,6 +824,7 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
         setTotal(finalTotal)
         setQueryMs(elapsed)
         setTimeout(() => loadDetails(finalResults, gen), 0)
+        setTimeout(() => loadCategories(finalResults, gen), 0)
       }
     } finally {
       clearTimeout(showAfter)
@@ -731,9 +880,24 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
         if ((filter.selected?.size ?? 0) > 0) params.set(`cfv_${colId}`, [...(filter.selected ?? new Set())].join(','))
       }
       const res = await fetch(`/api/formulary/search?${params}`)
-      const data = await res.json()
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      let expandedResults: SearchResult[] = []
+      while (true) {
+        const { done, value } = await reader.read()
+        if (value) buf += decoder.decode(value, { stream: !done })
+        const lines = buf.split('\n')
+        buf = lines.pop()!
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const chunk = JSON.parse(line)
+          if ('results' in chunk) expandedResults = chunk.results
+        }
+        if (done) break
+      }
       const existingIds = new Set(results.map(r => `${r.groupId}|${r.region}|${r.environment}`))
-      const newOnes = (data.results as SearchResult[]).filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
+      const newOnes = expandedResults.filter(r => !existingIds.has(`${r.groupId}|${r.region}|${r.environment}`))
       if (newOnes.length > 0) {
         const merged = [...results, ...newOnes]
         setResults(merged)
@@ -938,14 +1102,11 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
 
   return (
     <>
-    <div className="fixed inset-0 z-50 pointer-events-auto overflow-hidden" style={{ display: hidden ? 'none' : undefined }}>
-      {/* Dimmed background overlay */}
-      <div className="absolute inset-0" />
-
-      <div
-        className={`flex flex-col bg-[#D4D0C8] font-sans text-xs select-none border border-[#808080] absolute shadow-[2px_2px_0px_#000000,-1px_-1px_0px_#FFFFFF]`}
-        style={rect ? { left: rect.x, top: rect.y, width: rect.w, height: rect.h } : undefined}
-      >
+    <div
+      className={`flex flex-col bg-[#D4D0C8] font-sans text-xs select-none border border-[#808080] fixed shadow-[2px_2px_0px_#000000,-1px_-1px_0px_#FFFFFF]`}
+      style={rect ? { left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex: focused ? 51 : 50, display: hidden ? 'none' : undefined } : { display: 'none' }}
+      onPointerDownCapture={onFocus}
+    >
         {/* Resize Handles */}
         <>
           <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
@@ -960,7 +1121,7 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
 
         {/* Title bar */}
         <div
-          className="flex items-center justify-between bg-[#E69138] text-white px-2 h-7 shrink-0"
+          className={`flex items-center justify-between text-white px-2 h-7 shrink-0 transition-colors duration-150 ${focused ? 'bg-[#E69138]' : 'bg-[#9B6030]'}`}
           onPointerDown={isMaximized ? undefined : handlePointerDown('move')}
           onDoubleClick={toggleMaximize}
         >
@@ -970,7 +1131,7 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
             <span className="text-xs font-mono opacity-80 ml-2">[{scopeLabel(scope)}]</span>
           </div>
           <div className="flex gap-1" onPointerDown={e => e.stopPropagation()}>
-            <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
+            <button onPointerDown={e => { e.stopPropagation(); onMinimize?.() }} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
             <button onClick={toggleMaximize} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none active:bg-[#808080]">
               {isMaximized ? '❐' : '□'}
             </button>
@@ -1091,25 +1252,19 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                     onKeyDown={e => {
                       if (e.key === "Escape") { setSearchValue(""); return }
                       if (e.key === "Enter") {
-                        if (selectedResultIdx !== null) {
-                          handleOk()
-                        } else {
-                          handleSearch()
-                        }
+                        handleSearch()
                       }
                     }}
                     className="h-5 text-xs font-sans rounded-none border-t-[#808080] border-l-[#808080] border-b-white border-r-white border px-1 py-0 w-64 bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus-visible:ring-0 focus-visible:ring-offset-0"
                   />
-                  {searchValue && (
-                    <button
-                      onClick={() => setSearchValue("")}
-                      className="h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default"
-                      title="Clear search (Esc)"
-                      tabIndex={-1}
-                    >
-                      ✕
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setSearchValue("")}
+                    className={`h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default ${searchValue ? '' : 'invisible pointer-events-none'}`}
+                    title="Clear search (Esc)"
+                    tabIndex={-1}
+                  >
+                    ✕
+                  </button>
                   <RecentSearchDropdown
                     recentSearches={recentSearches}
                     onSelect={s => { setSearchValue(s); handleSearch(s) }}
@@ -1160,6 +1315,20 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                 >
                   Search
                 </button>
+                <button
+                  onClick={() => setShowAdvanced(v => !v)}
+                  className={`h-6 px-2 border text-xs flex items-center gap-1 shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] ${
+                    showAdvanced || advActiveCount > 0
+                      ? 'bg-[#E8F0FF] border-[#316AC5] text-[#316AC5]'
+                      : 'border-[#808080] text-black bg-[#D4D0C8] hover:bg-[#E8E8E0]'
+                  }`}
+                  title="Advanced filters"
+                >
+                  Advanced {showAdvanced ? '▲' : '▼'}
+                  {advActiveCount > 0 && (
+                    <span className="bg-[#316AC5] text-white text-[9px] px-1 py-px rounded-full">{advActiveCount}</span>
+                  )}
+                </button>
                 <label className="flex items-center gap-1 text-xs cursor-pointer select-none whitespace-nowrap">
                   <input
                     type="checkbox"
@@ -1169,6 +1338,31 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                   />
                   Unified
                 </label>
+                {allCategories.length > 0 && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className="text-xs text-[#808080] whitespace-nowrap">Cat:</span>
+                    <select
+                      value={categoryFilter}
+                      onChange={e => handleCategorySelect(e.target.value)}
+                      className="h-5 text-xs font-sans border border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] px-1 max-w-[120px]"
+                    >
+                      <option value="">All</option>
+                      {allCategories.map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                    {categoryFilter && (
+                      <button
+                        onClick={() => handleCategorySelect('')}
+                        className="h-4 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black"
+                        title="Clear category search"
+                      >✕</button>
+                    )}
+                    {categoriesLoading && (
+                      <span className="text-[10px] text-[#808080] animate-pulse">…</span>
+                    )}
+                  </div>
+                )}
                 {(() => {
                   const selectedRow = selectedResultIdx !== null ? sortedResults[selectedResultIdx] : null
                   const domainCount = selectedRow ? (variantsByGroup.get(getSemanticKey(selectedRow))?.length ?? 0) : 0
@@ -1193,6 +1387,75 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                 })()}
               </div>
 
+              {/* Advanced Filter Panel */}
+              {showAdvanced && (
+                <div className="shrink-0 border-t border-b border-[#808080] bg-[#F0EEE8] px-2 py-1.5 space-y-1.5">
+                  {/* Therapeutic Class */}
+                  <div className="flex items-start gap-1.5">
+                    <span className="text-[10px] font-mono text-[#404040] whitespace-nowrap w-24 shrink-0 pt-0.5">Therap. Class</span>
+                    <div className="flex flex-wrap items-center gap-1 flex-1 min-w-0">
+                      <TherapeuticClassPicker
+                        value=""
+                        onChange={code => {
+                          if (advFilter.tcItems.find(i => i.id === code)) return
+                          setAdvFilter(prev => ({
+                            ...prev,
+                            tcItems: [...prev.tcItems, {
+                              id: code, type: 'tc', op: 'include',
+                              label: tcLabel(code), icon: '', values: [code],
+                            }],
+                          }))
+                        }}
+                      >
+                        <button className="h-5 px-1.5 text-[9px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] shadow-[inset_1px_1px_0_#fff,inset_-1px_-1px_0_#808080] whitespace-nowrap shrink-0">
+                          ▼ Add…
+                        </button>
+                      </TherapeuticClassPicker>
+                      <FilterChips
+                        items={advFilter.tcItems}
+                        onChange={items => setAdvFilter(prev => ({ ...prev, tcItems: items }))}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Dosage Form */}
+                  <FieldFilterSelect
+                    field="dosage_form"
+                    filterGroups={filterGroups}
+                    items={advFilter.dfItems}
+                    onChange={items => setAdvFilter(prev => ({ ...prev, dfItems: items }))}
+                  />
+
+                  {/* Route */}
+                  <FieldFilterSelect
+                    field="route"
+                    filterGroups={filterGroups}
+                    items={advFilter.rtItems}
+                    onChange={items => setAdvFilter(prev => ({ ...prev, rtItems: items }))}
+                  />
+
+                  {/* Dispense Category */}
+                  <FieldFilterSelect
+                    field="dispense_category"
+                    filterGroups={filterGroups}
+                    items={advFilter.dcItems}
+                    onChange={items => setAdvFilter(prev => ({ ...prev, dcItems: items }))}
+                  />
+
+                  {/* Clear All */}
+                  {advActiveCount > 0 && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={clearAdvFilters}
+                        className="h-5 px-2 text-[9px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#FFCCCC] hover:border-[#CC0000]"
+                      >
+                        Clear All ({advActiveCount})
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Status bar — fixed height, no layout shift */}
               <div className="h-5 px-1 shrink-0 flex items-center justify-between text-xs text-[#808080]">
                 {isSelecting ? (
@@ -1214,7 +1477,14 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                 ) : (
                   <>
                     <span className="flex items-center gap-1.5">
-                      {total > results.length
+                      {categorySearchActive && categoryFilter
+                        ? (() => {
+                            const catName = allCategories.find(c => c.id === categoryFilter)?.name ?? 'Category'
+                            return results.length > 0
+                              ? `Category: ${catName} — ${sortedResults.length} drug${sortedResults.length !== 1 ? 's' : ''}.`
+                              : queryMs !== null ? `Category: ${catName} — no Pyxis IDs or no matches.` : ''
+                          })()
+                        : total > results.length
                         ? `Showing ${results.length} of ${total} results — refine to narrow.`
                         : results.length > 0
                         ? isUnified && baseResults.length < results.length
@@ -1376,12 +1646,10 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                           })
                         }
 
-                        // Wrap cell content with a hoverable ⚑ task button when the column differs
+                        // Wrap cell content with a hoverable diff tooltip + optional ⚑ task button
                         const cellWithTask = (colId: string, content: React.ReactNode) => {
-                          if (!onCreateTask || !parentDiffCols.has(colId)) {
-                            return <span className="truncate block">{content}</span>
-                          }
-                          return (
+                          const isDiff = parentDiffCols.has(colId)
+                          const inner = isDiff && onCreateTask ? (
                             <div className="flex items-center gap-0.5 group/cell min-w-0">
                               <span className="truncate min-w-0 flex-1">{content}</span>
                               <button
@@ -1402,8 +1670,18 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                                 ⚑
                               </button>
                             </div>
+                          ) : (
+                            <span className="truncate block">{content}</span>
+                          )
+                          if (!isDiff) return inner
+                          return (
+                            <FieldDiffTooltip values={buildFieldDomainValues(colId)}>
+                              {inner}
+                            </FieldDiffTooltip>
                           )
                         }
+
+                        const rowCats = groupCategories[r.groupId] ?? []
 
                         const parentRow = (
                           <tr
@@ -1419,7 +1697,7 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                               if (tdIdx < 1) return
                               const col = cols[tdIdx - 1]
                               if (!col) return
-                              setCtxMenu({ x: e.clientX, y: e.clientY, text: getCellText(col.id, r) })
+                              setCtxMenu({ x: e.clientX, y: e.clientY, text: getCellText(col.id, r), groupId: r.groupId, description: r.description })
                             }}
                             className={`border-b border-[#E0E0E0] cursor-pointer ${
                               isSelected
@@ -1458,6 +1736,28 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                                   >
                                     ⚑
                                   </button>
+                                )}
+                                {rowCats.length > 0 && (
+                                  <div className="flex items-center gap-[2px] ml-0.5">
+                                    {rowCats.slice(0, 4).map(cat => (
+                                      <div
+                                        key={cat.id}
+                                        title={cat.name}
+                                        onClick={e => { e.stopPropagation(); handleCategorySelect(cat.id) }}
+                                        style={{
+                                          background: isSelected ? 'rgba(255,255,255,0.7)' : cat.color,
+                                          border: `1px solid ${isSelected ? 'rgba(255,255,255,0.4)' : cat.color}`,
+                                        }}
+                                        className="w-[8px] h-[8px] rounded-[1px] shrink-0 cursor-pointer hover:opacity-80"
+                                      />
+                                    ))}
+                                    {rowCats.length > 4 && (
+                                      <span
+                                        className={`text-[8px] font-mono leading-none ${isSelected ? 'text-white/70' : 'text-[#808080]'}`}
+                                        title={rowCats.slice(4).map(c => c.name).join(', ')}
+                                      >+{rowCats.length - 4}</span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             </td>
@@ -1558,33 +1858,36 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                                 }
                                 case "charge":
                                   return (
-                                    <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>
+                                    <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>
                                       {r.chargeNumber && (
-                                        pDiff && onCreateTask
-                                          ? <div className="flex items-center gap-0.5 group/cell min-w-0">
-                                              <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
-                                                <div className={`w-2 h-2 shrink-0 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`} />
-                                                <span className="truncate">{r.chargeNumber}</span>
+                                        <FieldDiffTooltip values={pDiff ? buildFieldDomainValues('charge') : undefined}>
+                                          {pDiff && onCreateTask
+                                            ? <div className="flex items-center gap-0.5 group/cell min-w-0">
+                                                <span className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                                                  <div className={`w-2 h-2 shrink-0 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`} />
+                                                  <span className="truncate">{r.chargeNumber}</span>
+                                                </span>
+                                                <button
+                                                  onClick={e => { e.stopPropagation(); onCreateTask(r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId, r.description, 'charge', 'Charge Number', buildFieldDomainValues('charge')) }}
+                                                  className={`opacity-0 group-hover/cell:opacity-100 shrink-0 text-[7px] h-3.5 px-0.5 leading-none transition-opacity ${isSelected ? 'bg-white/20 text-white border border-white/30' : 'bg-[#1a4a9a] text-white'}`}
+                                                  title="Flag Charge Number for standardization"
+                                                >⚑</button>
+                                              </div>
+                                            : <span className="flex items-center gap-1.5">
+                                                <div className={`w-2 h-2 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`} />
+                                                {r.chargeNumber}
                                               </span>
-                                              <button
-                                                onClick={e => { e.stopPropagation(); onCreateTask(r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId, r.description, 'charge', 'Charge Number', buildFieldDomainValues('charge')) }}
-                                                className={`opacity-0 group-hover/cell:opacity-100 shrink-0 text-[7px] h-3.5 px-0.5 leading-none transition-opacity ${isSelected ? 'bg-white/20 text-white border border-white/30' : 'bg-[#1a4a9a] text-white'}`}
-                                                title="Flag Charge Number for standardization"
-                                              >⚑</button>
-                                            </div>
-                                          : <span className="flex items-center gap-1.5">
-                                              <div className={`w-2 h-2 border ${isSelected ? "bg-white border-white" : "bg-red-500 border-red-800"}`} />
-                                              {r.chargeNumber}
-                                            </span>
+                                          }
+                                        </FieldDiffTooltip>
                                       )}
                                     </td>
                                   )
-                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('pyxis', r.pyxisId)}</td>
-                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('mnemonic', r.mnemonic)}</td>
-                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('generic', r.genericName)}</td>
-                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('strength', strengthForm)}</td>
-                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('description', r.description)}</td>
-                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('brand', r.brandName)}</td>
+                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('pyxis', r.pyxisId)}</td>
+                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('mnemonic', r.mnemonic)}</td>
+                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('generic', r.genericName)}</td>
+                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('strength', strengthForm)}</td>
+                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('description', r.description)}</td>
+                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('brand', r.brandName)}</td>
                                 default:            return <td key={col.id} />
                               }
                             })}
@@ -1733,7 +2036,7 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                   <div className="fixed inset-0 z-[9998]" onClick={() => setCtxMenu(null)} />
                   <div
                     style={{ position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 9999 }}
-                    className="bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] text-xs font-sans py-0.5 min-w-[120px]"
+                    className="bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] text-xs font-sans py-0.5 min-w-[140px]"
                     onMouseDown={e => e.stopPropagation()}
                   >
                     <button
@@ -1743,6 +2046,107 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
                     >
                       Copy
                     </button>
+                    <div className="border-t border-[#C0C0C0] my-0.5" />
+                    <button
+                      className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap"
+                      onClick={() => {
+                        const { x, y, groupId, description } = ctxMenu
+                        setCtxMenu(null)
+                        fetch('/api/categories')
+                          .then(r => r.json())
+                          .then((d: { categories: DrugCategory[] }) => {
+                            setCatPicker({
+                              x, y,
+                              groupId: groupId ?? '',
+                              description: description ?? '',
+                              categories: d.categories ?? [],
+                              selected: new Set(),
+                              saving: false,
+                            })
+                          })
+                          .catch(() => {})
+                      }}
+                    >
+                      Add to Category…
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Category picker */}
+              {catPicker && (
+                <>
+                  <div className="fixed inset-0 z-[9998]" onClick={() => setCatPicker(null)} />
+                  <div
+                    style={{ position: 'fixed', left: catPicker.x, top: catPicker.y, zIndex: 9999 }}
+                    className="bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] text-xs font-sans py-0.5 min-w-[200px] max-h-64 flex flex-col"
+                    onMouseDown={e => e.stopPropagation()}
+                  >
+                    <div className="px-3 py-1 text-[10px] font-mono font-bold text-[#404040] border-b border-[#C0C0C0] shrink-0">
+                      Add to Category
+                    </div>
+                    <div className="overflow-y-auto flex-1">
+                      {catPicker.categories.length === 0 ? (
+                        <div className="px-4 py-2 text-[#808080]">No categories</div>
+                      ) : (
+                        catPicker.categories.map(cat => (
+                          <label
+                            key={cat.id}
+                            className="flex items-center gap-2 px-3 py-0.5 cursor-pointer hover:bg-[#E0E8FF]"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={catPicker.selected.has(cat.id)}
+                              onChange={e => {
+                                setCatPicker(prev => {
+                                  if (!prev) return prev
+                                  const next = new Set(prev.selected)
+                                  if (e.target.checked) next.add(cat.id)
+                                  else next.delete(cat.id)
+                                  return { ...prev, selected: next }
+                                })
+                              }}
+                              className="w-3 h-3"
+                            />
+                            <span
+                              className="w-2 h-2 rounded-sm shrink-0"
+                              style={{ background: cat.color }}
+                            />
+                            <span className="truncate">{cat.name}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                    <div className="border-t border-[#C0C0C0] px-2 py-1 flex gap-1 shrink-0">
+                      <button
+                        disabled={catPicker.selected.size === 0 || catPicker.saving}
+                        onClick={async () => {
+                          setCatPicker(prev => prev ? { ...prev, saving: true } : prev)
+                          try {
+                            await Promise.all(
+                              [...catPicker.selected].map(catId =>
+                                fetch(`/api/categories/${catId}/members`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ groupId: catPicker.groupId, drugDescription: catPicker.description }),
+                                })
+                              )
+                            )
+                          } finally {
+                            setCatPicker(null)
+                          }
+                        }}
+                        className="flex-1 text-[10px] font-mono py-0.5 bg-[#316AC5] text-white border border-[#1a4a9a] disabled:opacity-50"
+                      >
+                        {catPicker.saving ? 'Adding…' : `Add (${catPicker.selected.size})`}
+                      </button>
+                      <button
+                        onClick={() => setCatPicker(null)}
+                        className="text-[10px] font-mono px-2 py-0.5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 </>
               )}
@@ -2050,7 +2454,6 @@ export function SearchModal({ onClose, hidden, searchTrigger, scope: initialScop
           </div>
         </div>
 
-      </div>
     </div>
 
     {isCompareOpen && (() => {

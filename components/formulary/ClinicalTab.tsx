@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import type { FormularyItem } from "@/lib/types"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
 import type { FieldValueMap } from "@/lib/formulary-diff"
+import { tcLabel } from "@/lib/therapeutic-class-map"
 
 interface ClinicalTabProps {
   item: FormularyItem | null
@@ -104,7 +105,7 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
                 </div>
               </div>
               <Input
-                value={d?.therapeuticClass ?? ""}
+                value={tcLabel(d?.therapeuticClass)}
                 readOnly
                 className="h-6 text-xs font-mono rounded-none border-[#808080] px-1 py-0 bg-white"
               />

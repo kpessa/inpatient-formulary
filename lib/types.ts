@@ -302,6 +302,48 @@ export interface ProductBuild {
 }
 
 // ---------------------------------------------------------------------------
+// Category Manager
+// ---------------------------------------------------------------------------
+
+export interface DrugCategory {
+  id: string
+  name: string
+  description: string
+  color: string
+  manualCount: number
+  ruleCount: number
+  totalCount: number
+}
+
+export interface CategoryRule {
+  id: string
+  categoryId: string
+  field: 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'status' | 'strength'
+  operator: 'equals' | 'contains' | 'starts_with' | 'ends_with'
+  value: string
+}
+
+export interface CategoryMember {
+  groupId: string
+  drugDescription: string
+  source: 'manual' | 'rule'
+  ruleId?: string   // which rule matched, if source === 'rule'
+}
+
+// ---------------------------------------------------------------------------
+// Search Filter Groups
+// ---------------------------------------------------------------------------
+
+export interface SearchFilterGroup {
+  id: string
+  name: string
+  icon: string
+  field: 'dosage_form' | 'route' | 'dispense_category'
+  values: string[]   // exact DB values (not LIKE patterns)
+  sortOrder: number
+}
+
+// ---------------------------------------------------------------------------
 // Top-level FormularyItem — one per GROUP_ID
 // ---------------------------------------------------------------------------
 export interface FormularyItem {
