@@ -98,7 +98,12 @@ export async function GET(req: NextRequest) {
             controller.enqueue(encoder.encode(JSON.stringify({ total: count }) + '\n'))
           },
         })
-        controller.enqueue(encoder.encode(JSON.stringify({ results, total }) + '\n'))
+        const jsonStr = JSON.stringify({ results, total }) + '\n'
+        const payload = encoder.encode(jsonStr)
+        const chunkSize = 16 * 1024
+        for (let offset = 0; offset < payload.length; offset += chunkSize) {
+          controller.enqueue(payload.slice(offset, offset + chunkSize))
+        }
       } finally {
         controller.close()
       }

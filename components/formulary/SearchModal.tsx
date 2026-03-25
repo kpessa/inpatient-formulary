@@ -664,9 +664,23 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       if (item.op === 'include') postRule({ field: 'therapeuticClass', operator: 'equals', value: item.id })
     // Exclusions
     for (const semKey of excludedKeys) {
-      const result = displayedResults.find(r => getSemanticKey(r) === semKey) ?? sortedResults.find(r => getSemanticKey(r) === semKey)
-      if (result) posts.push(
-        fetch(`/api/categories/${catId}/exclusions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: result.groupId, drugDescription: result.description }) })
+      const payload = exclusionPayloads.get(semKey)
+      if (payload) {
+        posts.push(
+          fetch(`/api/categories/${catId}/exclusions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        )
+      } else {
+        const result = displayedResults.find(r => getSemanticKey(r) === semKey) ?? sortedResults.find(r => getSemanticKey(r) === semKey)
+        if (result) posts.push(
+          fetch(`/api/categories/${catId}/exclusions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: result.groupId, drugDescription: result.description }) })
+        )
+      }
+    }
+    
+    // Add unresolved exclusions back
+    for (const ex of unresolvedExclusions) {
+      posts.push(
+        fetch(`/api/categories/${catId}/exclusions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ex) })
       )
     }
     await Promise.all(posts)
@@ -684,14 +698,21 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       setInputValue('')
       setAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
       setExcludedKeys(new Set())
+      setExclusionPayloads(new Map())
+      setUnresolvedExclusions([])
+      setExclusionPanelOpen(false)
       return
     }
-    // Fetch rules, pyxis IDs, and exclusions in parallel
-    const [catData, { pyxisIds }, { exclusions }] = await Promise.all([
+    // Fetch rules and exclusions (no Pyxis IDs — live rule evaluation)
+    const [catData, { exclusions }] = await Promise.all([
       fetch(`/api/categories/${catId}`).then(r => r.json()) as Promise<{ category: { id: string; name: string }; rules: CategoryRule[] }>,
-      fetch(`/api/categories/${catId}/pyxis-ids`).then(r => r.json()) as Promise<{ pyxisIds: string[] }>,
       fetch(`/api/categories/${catId}/exclusions`).then(r => r.json()) as Promise<{ exclusions: CategoryExclusion[] }>,
     ])
+
+    if (!catData?.category) {
+      setIsLoading(false)
+      return
+    }
 
     // Split rules: query fields → QueryBuilder; filter fields → advFilter panel
     const ADV_FILTER_FIELDS = new Set(['dosageForm', 'route', 'dispenseCategory', 'therapeuticClass'])
@@ -699,10 +720,12 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     const filterRules = (catData.rules ?? []).filter(r => ADV_FILTER_FIELDS.has(r.field as string))
 
     // Restore QueryBuilder from query rules
+    let searchQuery = ''
     if (queryRules.length > 0) {
       const qs = rulesToQueryState(queryRules, Object.fromEntries(ALL_CATALOG_FIELDS.map(f => [f.key, f.label])))
       setQueryState(qs)
-      setSearchValue(serializeQueryCompact(qs.tokens))
+      searchQuery = serializeQueryCompact(qs.tokens)
+      setSearchValue(searchQuery)
     } else {
       setQueryState(null)
       setSearchValue('')
@@ -734,49 +757,115 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     }
     setAdvFilter(newAdvFilter)
 
+    // Show exclusions immediately (before search completes)
+    const dbExclusions = exclusions ?? []
+    const excludedGroupIds = new Set(dbExclusions.map(e => e.groupId))
+    setExcludedKeys(new Set())
+    setExclusionPayloads(new Map())
+    setUnresolvedExclusions(dbExclusions)
+    setExclusionPanelOpen(false)
+
+    // Build advFilter values from filter rules
+    const dfValues = filterRules.filter(r => r.field === 'dosageForm').flatMap(r => r.value.split(',').map(v => v.trim()).filter(Boolean))
+    const rtValues = filterRules.filter(r => r.field === 'route').flatMap(r => r.value.split(',').map(v => v.trim()).filter(Boolean))
+    const dcValues = filterRules.filter(r => r.field === 'dispenseCategory').flatMap(r => r.value.split(',').map(v => v.trim()).filter(Boolean))
+    const tcCodes = filterRules.filter(r => r.field === 'therapeuticClass').flatMap(r => [r.value, ...tcDescendants(r.value)])
+
+    // If no search query and no filters, nothing to search
+    if (!searchQuery && !dfValues.length && !rtValues.length && !dcValues.length && !tcCodes.length) {
+      setCategorySearchActive(true)
+      setResults([])
+      setTotal(0)
+      return
+    }
+
+    // Build shared search params (scope + advFilter)
+    const scopeParams: Record<string, string> = {}
+    if (scope.type === 'domain') { scopeParams.region = scope.region; scopeParams.environment = scope.env }
+    else if (scope.type === 'region') scopeParams.region = scope.region
+    else if (scope.type === 'env') scopeParams.environment = scope.env
+    const advParams: Record<string, string> = {}
+    if (dfValues.length) advParams.advDFInclude = dfValues.join(',')
+    if (rtValues.length) advParams.advRtInclude = rtValues.join(',')
+    if (dcValues.length) advParams.advDCInclude = dcValues.join(',')
+    if (tcCodes.length) advParams.advTC = [...new Set(tcCodes)].join(',')
+
+    // NDJSON stream reader for a single clause
+    const fetchClause = async (field: string | null, value: string): Promise<SearchResult[]> => {
+      const p = new URLSearchParams({ q: value, limit: '5000', ...scopeParams, ...advParams })
+      if (field) p.set('field', field)
+      const res = await fetch(`/api/formulary/search?${p}`)
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      let clauseResults: SearchResult[] = []
+      while (true) {
+        const { done, value: chunk } = await reader.read()
+        if (chunk) buf += decoder.decode(chunk, { stream: !done })
+        const lines = buf.split('\n')
+        buf = lines.pop()!
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const parsed = JSON.parse(line)
+          if ('results' in parsed) clauseResults = parsed.results
+        }
+        if (done) break
+      }
+      return clauseResults
+    }
+
     setCategorySearchActive(true)
     const gen = ++searchGenRef.current
     setResults([])
     setGroupCategories({})
     setTotal(0)
     setQueryMs(null)
-    if (pyxisIds.length === 0) return
     setIsLoading(true)
-    const params = new URLSearchParams({ pyxisIds: pyxisIds.join(',') })
-    if (scope.type === 'domain') { params.set('region', scope.region); params.set('environment', scope.env) }
-    else if (scope.type === 'region') params.set('region', scope.region)
-    else if (scope.type === 'env') params.set('environment', scope.env)
     const t0 = performance.now()
     try {
-      const res = await fetch(`/api/formulary/search?${params}`)
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
-      let finalResults: SearchResult[] = []
-      while (true) {
-        const { done, value } = await reader.read()
-        if (value) buf += decoder.decode(value, { stream: !done })
-        const lines = buf.split('\n')
-        buf = lines.pop()!
-        for (const line of lines) {
-          if (!line.trim()) continue
-          const chunk = JSON.parse(line)
-          if ('results' in chunk) { finalResults = chunk.results; setTotal(chunk.total) }
-        }
-        if (done) break
+      let finalResults: SearchResult[]
+
+      // Build query state from query rules and evaluate
+      const qs = queryRules.length > 0
+        ? rulesToQueryState(queryRules, Object.fromEntries(ALL_CATALOG_FIELDS.map(f => [f.key, f.label])))
+        : null
+
+      if (qs && qs.tokens.filter(t => t.type === 'clause').length > 0) {
+        // Has query rules → use evaluateQueryState for boolean logic
+        finalResults = await evaluateQueryState(qs, (field, value) => fetchClause(field, value))
+      } else {
+        // Only filter rules (no query) → broad search with advFilter params
+        finalResults = await fetchClause(null, '*')
       }
+
       if (searchGenRef.current !== gen) return
       setResults(finalResults)
+      setTotal(finalResults.length)
       setQueryMs(Math.round(performance.now() - t0))
+      setLastParsedQuery(qs ? queryStateToParsedQuery(qs) : { isAdvanced: false, clauses: [] })
+
       // Restore exclusions: match saved groupIds against loaded results
-      if (exclusions && exclusions.length > 0) {
-        const excludedGroupIds = new Set(exclusions.map(e => e.groupId))
-        const restoredKeys = new Set<string>()
+      const newExcludedKeys = new Set<string>()
+      const newPayloads = new Map<string, { groupId: string; drugDescription: string }>()
+      const unresolved: { groupId: string; drugDescription: string }[] = []
+      
+      const dbExclusions = exclusions ?? []
+      for (const ex of dbExclusions) {
+        let matched = false
         for (const r of finalResults) {
-          if (excludedGroupIds.has(r.groupId)) restoredKeys.add(getSemanticKey(r))
+          if (r.groupId === ex.groupId) {
+            const semKey = getSemanticKey(r)
+            newExcludedKeys.add(semKey)
+            newPayloads.set(semKey, { groupId: ex.groupId, drugDescription: ex.drugDescription })
+            matched = true
+          }
         }
-        if (restoredKeys.size > 0) setExcludedKeys(restoredKeys)
+        if (!matched) unresolved.push(ex)
       }
+      
+      setExcludedKeys(newExcludedKeys)
+      setExclusionPayloads(newPayloads)
+      setUnresolvedExclusions(unresolved)
       setTimeout(() => loadDetails(finalResults, gen), 0)
       setTimeout(() => loadCategories(finalResults, gen), 0)
     } catch (err) {
@@ -796,6 +885,9 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const [isSelecting, setIsSelecting] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string; groupId?: string; description?: string; semanticKey?: string } | null>(null)
   const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set())
+  const [exclusionPayloads, setExclusionPayloads] = useState<Map<string, { groupId: string; drugDescription: string }>>(new Map())
+  const [unresolvedExclusions, setUnresolvedExclusions] = useState<{ groupId: string; drugDescription: string }[]>([])
+  const [exclusionPanelOpen, setExclusionPanelOpen] = useState(false)
   const [saveCatDialog, setSaveCatDialog] = useState<{ name: string; color: string; saving: boolean; updateCategoryId?: string } | null>(null)
   // Parsed advanced query: updated whenever a search completes successfully
   const [lastParsedQuery, setLastParsedQuery] = useState<ParsedQuery | null>(null)
@@ -1057,10 +1149,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
           // Click: push to top of sort stack as primary (or toggle if already primary)
           setSortStack(prev => {
             if (prev.length > 0 && prev[0].colId === colId) {
-              return prev.map(s => s.colId === colId ? { ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' } : s)
+              return prev.map(s => s.colId === colId ? { colId: s.colId, dir: s.dir === 'asc' ? 'desc' : 'asc' } : s)
             }
             const rest = prev.filter(s => s.colId !== colId)
-            return [{ colId, dir: 'asc' }, ...rest].slice(0, 3)
+            return [{ colId, dir: 'asc' as const }, ...rest].slice(0, 3)
           })
         } else if (from !== to) {
           setCols(prev => {
@@ -1169,6 +1261,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     setElapsedSec(null)
     setFieldStatus({})
     setExcludedKeys(new Set())  // clear exclusions on new search
+    setExclusionPayloads(new Map())
+    setUnresolvedExclusions([])
     const parsed = parseAdvancedQuery(query)
     const t0 = performance.now()
     searchStartRef.current = t0
@@ -1650,6 +1744,21 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     : sortedResults
   ).filter(r => !excludedKeys.has(getSemanticKey(r)))
 
+  const totalExclusionCount = excludedKeys.size + unresolvedExclusions.length
+  const allExclusions = useMemo(() => {
+    const list: { key: string; groupId: string; drugDescription: string; resolved: boolean }[] = []
+    for (const semKey of excludedKeys) {
+      const payload = exclusionPayloads.get(semKey)
+      const r = !payload ? results.find(r2 => getSemanticKey(r2) === semKey) : null
+      list.push({ key: semKey, groupId: payload?.groupId ?? r?.groupId ?? semKey,
+        drugDescription: payload?.drugDescription ?? r?.description ?? semKey, resolved: true })
+    }
+    for (const ex of unresolvedExclusions) {
+      list.push({ key: `unresolved:${ex.groupId}`, groupId: ex.groupId, drugDescription: ex.drugDescription, resolved: false })
+    }
+    return list
+  }, [excludedKeys, exclusionPayloads, unresolvedExclusions, results])
+
   // Filter panel computed values
   const fpFilter = filterPanel
     ? (colFilters[filterPanel.colId] ?? { text: "", selected: new Set<string>() })
@@ -2084,6 +2193,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                       </div>
                       <span>{pendingTotal !== null ? `Found ${pendingTotal}${elapsedSec !== null ? ` — ${elapsedSec}s…` : ' — loading…'}` : elapsedSec !== null ? `${elapsedSec}s…` : 'Searching…'}</span>
                     </div>
+                    {totalExclusionCount > 0 && (
+                      <span
+                        className="inline-flex items-center gap-1 bg-[#FFF0E0] border border-[#F97316] text-[#C04000] px-1.5 py-0 rounded-sm cursor-pointer select-none"
+                        onClick={() => setExclusionPanelOpen(p => !p)}
+                      >
+                        <span>Excluded: {totalExclusionCount} drug{totalExclusionCount !== 1 ? 's' : ''} {exclusionPanelOpen ? '\u25B4' : '\u25BE'}</span>
+                      </span>
+                    )}
                   </>
                 ) : (
                   <>
@@ -2093,7 +2210,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                             const catName = allCategories.find(c => c.id === categoryFilter)?.name ?? 'Category'
                             return results.length > 0
                               ? `Category: ${catName} — ${displayedResults.length} drug${displayedResults.length !== 1 ? 's' : ''}.`
-                              : queryMs !== null ? `Category: ${catName} — no Pyxis IDs or no matches.` : ''
+                              : queryMs !== null ? `Category: ${catName} — no matches.` : ''
                           })()
                         : total > results.length
                         ? `Showing ${results.length} of ${total} results — refine to narrow.`
@@ -2116,17 +2233,20 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                           </button>
                         </>
                       )}
-                      {excludedKeys.size > 0 && (
-                        <>
-                          <span className="text-[#808080]">· excluded {excludedKeys.size}</span>
+                      {totalExclusionCount > 0 && (
+                        <span
+                          className="inline-flex items-center gap-1 bg-[#FFF0E0] border border-[#F97316] text-[#C04000] px-1.5 py-0 rounded-sm cursor-pointer select-none"
+                          onClick={() => setExclusionPanelOpen(p => !p)}
+                        >
+                          <span>Excluded: {totalExclusionCount} drug{totalExclusionCount !== 1 ? 's' : ''} {exclusionPanelOpen ? '\u25B4' : '\u25BE'}</span>
                           <button
-                            onClick={() => setExcludedKeys(new Set())}
-                            className="text-[#808080] hover:text-red-600 font-bold leading-none"
+                            onClick={e => { e.stopPropagation(); setExcludedKeys(new Set()); setExclusionPayloads(new Map()); setUnresolvedExclusions([]); setExclusionPanelOpen(false) }}
+                            className="hover:text-red-600 font-bold leading-none"
                             title="Clear all exclusions"
                           >
                             ×
                           </button>
-                        </>
+                        </span>
                       )}
                       {results.length > 0 && filteredResults.length < results.length && (
                         <>
@@ -2170,6 +2290,37 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   </>
                 )}
               </div>
+
+              {/* Exclusion panel */}
+              {exclusionPanelOpen && totalExclusionCount > 0 && (
+                <div className="border border-[#CC0000]/30 bg-[#FFF5F5] p-2 mt-1 mx-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-mono font-bold text-[#CC0000]">Exclusions ({totalExclusionCount})</span>
+                    <button onClick={() => setExclusionPanelOpen(false)} className="text-[9px] text-[#808080] hover:text-[#404040]">Collapse</button>
+                  </div>
+                  <div className="flex flex-col gap-0.5 max-h-[120px] overflow-y-auto">
+                    {allExclusions.map(item => (
+                      <div key={item.key} className="flex items-center justify-between px-1.5 py-0.5 bg-white border border-[#E0DDD8] text-[10px] font-mono">
+                        <span className="truncate flex-1 line-through opacity-60">{item.drugDescription || item.groupId}</span>
+                        {!item.resolved && <span className="text-[9px] text-[#808080] mx-1 shrink-0">(not in results)</span>}
+                        <button
+                          onClick={() => {
+                            if (item.resolved) {
+                              setExcludedKeys(prev => { const n = new Set(prev); n.delete(item.key); return n })
+                              setExclusionPayloads(prev => { const n = new Map(prev); n.delete(item.key); return n })
+                            } else {
+                              setUnresolvedExclusions(prev => prev.filter(e => e.groupId !== item.groupId))
+                            }
+                          }}
+                          className="text-[9px] text-[#316AC5] hover:underline ml-2 shrink-0"
+                        >
+                          Un-exclude
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Table */}
               <div className="flex-1 border border-[#808080] bg-white mt-1 overflow-auto shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)]">
@@ -2875,8 +3026,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                             {advFilter.tcItems.map((it, i) => <div key={`tc${i}`}>+ therapeutic class: {it.label}</div>)}
                           </div>
                         )}
-                        {excludedKeys.size > 0 && (
-                          <div className="mt-0.5 text-[#808080]">{excludedKeys.size} manual exclusion{excludedKeys.size !== 1 ? 's' : ''}</div>
+                        {totalExclusionCount > 0 && (
+                          <div className="mt-0.5 text-[#808080]">{totalExclusionCount} manual exclusion{totalExclusionCount !== 1 ? 's' : ''}</div>
                         )}
                       </div>
                       <div className="flex gap-2 justify-end pt-1">
@@ -2961,17 +3112,35 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     </button>
                     <div className="border-t border-[#C0C0C0] my-0.5" />
                     {ctxMenu?.semanticKey && (
-                      <button
-                        className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap"
-                        onClick={() => {
-                          if (ctxMenu.semanticKey) {
-                            setExcludedKeys(prev => new Set([...prev, ctxMenu.semanticKey!]))
-                          }
-                          setCtxMenu(null)
-                        }}
-                      >
-                        ✕ Exclude from results
-                      </button>
+                      excludedKeys.has(ctxMenu.semanticKey) ? (
+                        <button
+                          className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap"
+                          onClick={() => {
+                            if (ctxMenu.semanticKey) {
+                              setExcludedKeys(prev => { const n = new Set(prev); n.delete(ctxMenu.semanticKey!); return n })
+                            }
+                            setCtxMenu(null)
+                          }}
+                        >
+                          ↩ Un-exclude
+                        </button>
+                      ) : (
+                        <button
+                          className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap"
+                          onClick={() => {
+                            if (ctxMenu.semanticKey) {
+                              setExcludedKeys(prev => new Set([...prev, ctxMenu.semanticKey!]))
+                              const result = sortedResults.find(r => getSemanticKey(r) === ctxMenu.semanticKey)
+                              if (result) {
+                                setExclusionPayloads(prev => new Map(prev).set(ctxMenu.semanticKey!, { groupId: result.groupId, drugDescription: result.description }))
+                              }
+                            }
+                            setCtxMenu(null)
+                          }}
+                        >
+                          ✕ Exclude from results
+                        </button>
+                      )
                     )}
                     <button
                       className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap"

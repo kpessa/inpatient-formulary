@@ -124,6 +124,7 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
   const [editDesc, setEditDesc] = useState('')
   const [editColor, setEditColor] = useState('#6B7280')
   const [rules, setRules] = useState<CategoryRule[]>([])
+  const [exclusions, setExclusions] = useState<{ groupId: string; drugDescription: string }[]>([])
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -225,10 +226,17 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
     setEditDesc(cat.description)
     setEditColor(cat.color)
     setRules([])
+    setExclusions([])
     setConfirmDelete(false)
     setCatAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
     setRulesDirty(false)
     advFilterLoadedRef.current = false
+
+    // Fetch exclusions in parallel
+    fetch(`/api/categories/${cat.id}/exclusions`)
+      .then(r => r.json())
+      .then((d: { exclusions: { groupId: string; drugDescription: string }[] }) => setExclusions(d.exclusions ?? []))
+      .catch(() => setExclusions([]))
 
     fetch(`/api/categories/${cat.id}`)
       .then(r => r.json())
@@ -1034,6 +1042,36 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
                         </div>
                       )}
                     </div>
+
+                    {/* Exclusions */}
+                    {exclusions.length > 0 && (
+                      <div className="border border-[#CC0000]/30 p-2 bg-[#FFF5F5] space-y-1">
+                        <div className="text-[10px] font-mono font-bold text-[#CC0000]">
+                          Exclusions ({exclusions.length})
+                        </div>
+                        <div className="flex flex-col gap-0.5">
+                          {exclusions.map(ex => (
+                            <div key={ex.groupId} className="flex items-center justify-between px-1.5 py-0.5 bg-white border border-[#E0DDD8] text-[10px] font-mono">
+                              <span className="truncate flex-1 line-through opacity-60">{ex.drugDescription || ex.groupId}</span>
+                              <button
+                                onClick={async () => {
+                                  if (!selectedId) return
+                                  await fetch(`/api/categories/${selectedId}/exclusions`, {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ groupId: ex.groupId }),
+                                  })
+                                  setExclusions(prev => prev.filter(e => e.groupId !== ex.groupId))
+                                }}
+                                className="text-[9px] text-[#316AC5] hover:underline ml-2 shrink-0"
+                              >
+                                ↩ Un-exclude
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* QueryBuilder rules */}
                     {rules.length === 0 ? (
