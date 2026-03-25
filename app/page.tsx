@@ -17,6 +17,7 @@ import { RecentSearchDropdown } from "@/components/formulary/RecentSearchDropdow
 import { TaskPanel } from "@/components/formulary/TaskPanel"
 import { TaskCreateDialog } from "@/components/formulary/TaskCreateDialog"
 import { BuildChecklist } from "@/components/formulary/BuildChecklist"
+import { NonReferenceDialog } from "@/components/formulary/NonReferenceDialog"
 import { CategoryManager } from "@/components/formulary/CategoryManager"
 import {
   DropdownMenu,
@@ -93,6 +94,7 @@ export default function PharmNetFormulary() {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
   const [isBuildOpen, setIsBuildOpen] = useState(false)
+  const [isNonReferenceOpen, setIsNonReferenceOpen] = useState(false)
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false)
 
   // Window manager
@@ -440,6 +442,13 @@ export default function PharmNetFormulary() {
           >
             🔍
           </button>
+          <button
+            onClick={() => setIsNonReferenceOpen(true)}
+            className="h-5 px-2 text-[11px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] whitespace-nowrap"
+            title="Add new non-reference drug"
+          >
+            + New
+          </button>
         </div>
       </div>
 
@@ -675,6 +684,24 @@ export default function PharmNetFormulary() {
         <BuildChecklist
           availableDomains={availableDomains}
           onClose={() => setIsBuildOpen(false)}
+        />
+      )}
+
+      {/* Non-reference drug creation */}
+      {isNonReferenceOpen && (
+        <NonReferenceDialog
+          availableDomains={availableDomains}
+          onClose={() => setIsNonReferenceOpen(false)}
+          onCreated={(groupId) => {
+            setIsNonReferenceOpen(false)
+            const fetchParams = { groupId, pyxisId: undefined, chargeNumber: undefined }
+            currentFetchParamsRef.current = fetchParams
+            setDomainItems({})
+            setBaseDomain(null)
+            const available = availableDomains.filter(d => d.env === 'prod').map(d => d.domain)
+            doFetchDomainItems(fetchParams, showRawExtract, available)
+            setIsBuildOpen(true)
+          }}
         />
       )}
 

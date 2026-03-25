@@ -1,4 +1,5 @@
 import { createClient, type Client, type Row } from '@libsql/client'
+import { randomUUID } from 'crypto'
 import type {
   FormularyItem,
   OeDefaults,
@@ -748,4 +749,130 @@ export async function getFormularyItem(
   }
 
   return item
+}
+
+// ---------------------------------------------------------------------------
+// Non-Reference Item Creation
+// ---------------------------------------------------------------------------
+
+export interface NonReferenceFields {
+  ndc: string
+  manufacturer: string
+  genericName: string
+  mnemonic: string
+  description: string
+  brandName: string
+  awpCost: number | null
+  strength: string
+  dosageForm: string
+  packageSize: number | null
+  packageUnit: string
+  basePackageUnit: string
+  outerPackageSize: number | null
+  outerPackageUnit: string
+  isBiological: boolean
+  isUnitDose: boolean
+  isBrand: boolean
+  suppressClinicalAlerts: boolean
+}
+
+export async function createNonReferenceItem(
+  fields: NonReferenceFields,
+  domains: { region: string; environment: string; domain: string }[],
+): Promise<{ groupId: string }> {
+  if (domains.length === 0) throw new Error('At least one domain required')
+  const db = getDb()
+  const groupId = randomUUID()
+  const now = new Date().toISOString()
+
+  const identifiers_json = JSON.stringify({
+    brandName: fields.brandName,
+    isBrandPrimary: true,
+    brandName2: '', isBrand2Primary: false,
+    brandName3: '', isBrand3Primary: false,
+    chargeNumber: '', labelDescription: '',
+    genericName: fields.genericName,
+    hcpcsCode: '', mnemonic: fields.mnemonic,
+    pyxisId: '', groupRxMnemonic: '',
+  })
+
+  const oe_defaults_json = JSON.stringify({
+    dose: '', referenceDose: '', route: '', frequency: '',
+    infuseOver: '', infuseOverUnit: '', rate: '', rateUnit: '',
+    normalizedRate: '', normalizedRateUnit: '', freetextRate: '',
+    isPrn: false, prnReason: '', duration: null, durationUnit: '',
+    stopType: '', orderedAsSynonym: '', defaultFormat: '',
+    searchMedication: false, searchContinuous: false, searchIntermittent: false,
+    notes1: '', notes1AppliesToFill: false, notes1AppliesToLabel: false, notes1AppliesToMar: false,
+    notes2: '', notes2AppliesToFill: false, notes2AppliesToLabel: false, notes2AppliesToMar: false,
+  })
+
+  const dispense_json = JSON.stringify({
+    strength: null, strengthUnit: '',
+    volume: null, volumeUnit: '',
+    usedInTotalVolumeCalculation: false,
+    dispenseQty: null, dispenseQtyUnit: '',
+    dispenseCategory: '',
+    isDivisible: false, isInfinitelyDivisible: false,
+    minimumDoseQty: null,
+    packageSize: fields.packageSize, packageUnit: fields.packageUnit,
+    outerPackageSize: fields.outerPackageSize, outerPackageUnit: fields.outerPackageUnit,
+    basePackageUnit: fields.basePackageUnit,
+    packageDispenseQty: null, packageDispenseOnlyQtyNeeded: false,
+    formularyStatus: 'Non-Ref Build', priceSchedule: '',
+    awpFactor: null, defaultParDoses: null, maxParQty: null,
+  })
+
+  const clinical_json = JSON.stringify({
+    genericFormulationCode: '', drugFormulationCode: '',
+    suppressMultumAlerts: fields.suppressClinicalAlerts,
+    therapeuticClass: '', dcInteractionDays: null, dcDisplayDays: null, orderAlert1: '',
+  })
+
+  const inventory_json = JSON.stringify({
+    allFacilities: false, facilities: {},
+    dispenseFrom: '', isReusable: false,
+    inventoryFactor: null, inventoryBasePackageUnit: '',
+  })
+
+  const supply_json = JSON.stringify({})
+
+  const stmts = domains.flatMap(({ region, environment, domain }) => [
+    {
+      sql: `INSERT INTO formulary_groups (
+              domain, region, environment, extracted_at,
+              group_id, description, generic_name, mnemonic,
+              charge_number, brand_name, brand_name2, brand_name3, pyxis_id,
+              status, formulary_status, strength, strength_unit, dosage_form, legal_status,
+              identifiers_json, oe_defaults_json, dispense_json, clinical_json, inventory_json,
+              therapeutic_class
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [
+        domain, region, environment, now,
+        groupId, fields.description, fields.genericName, fields.mnemonic,
+        '', fields.brandName, '', '', '',
+        'Active', 'Non-Ref Build', fields.strength, '', fields.dosageForm,
+        fields.isBrand ? 'B' : 'G',
+        identifiers_json, oe_defaults_json, dispense_json, clinical_json, inventory_json,
+        '',
+      ],
+    },
+    {
+      sql: `INSERT INTO supply_records (
+              domain, group_id, ndc, is_non_reference, is_active,
+              manufacturer, manufacturer_brand, manufacturer_label_desc,
+              is_primary, is_biological, is_brand, is_unit_dose,
+              awp_cost, cost1, cost2, supply_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [
+        domain, groupId, fields.ndc, 1, 1,
+        fields.manufacturer, '', '',
+        1, fields.isBiological ? 1 : 0, fields.isBrand ? 1 : 0, fields.isUnitDose ? 1 : 0,
+        fields.awpCost, null, null, supply_json,
+      ],
+    },
+  ])
+
+  await db.batch(stmts, 'write')
+  return { groupId }
 }
