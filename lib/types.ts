@@ -320,7 +320,7 @@ export interface CategoryRule {
   categoryId: string
   field: 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'status' | 'strength'
         | 'description' | 'genericName' | 'mnemonic' | 'brandName'
-  operator: 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'matches_regex'
+  operator: 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'matches_regex' | 'in'
   value: string
 }
 

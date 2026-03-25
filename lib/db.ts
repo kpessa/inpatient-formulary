@@ -122,18 +122,32 @@ function buildAdvancedClauses(
   }
 }
 
-// Maps field alias → DB column name for single-field search scoping
+// Maps field alias → DB column name (or json_extract expression) for single-field search scoping
 const FIELD_DB_COL: Record<string, string> = {
-  description: 'description',
-  generic:     'generic_name',
-  genericName: 'generic_name',
-  mnemonic:    'mnemonic',
-  brand:       'brand_name',
-  brandName:   'brand_name',
-  charge:      'charge_number',
-  chargeNumber:'charge_number',
-  pyxis:       'pyxis_id',
-  pyxisId:     'pyxis_id',
+  description:      'description',
+  generic:          'generic_name',
+  genericName:      'generic_name',
+  mnemonic:         'mnemonic',
+  brand:            'brand_name',
+  brandName:        'brand_name',
+  charge:           'charge_number',
+  chargeNumber:     'charge_number',
+  pyxis:            'pyxis_id',
+  pyxisId:          'pyxis_id',
+  dosageForm:       'dosage_form',
+  strength:         'strength',
+  status:           'status',
+  formularyStatus:  'formulary_status',
+  dose:             "json_extract(oe_defaults_json, '$.dose')",
+  route:            "json_extract(oe_defaults_json, '$.route')",
+  frequency:        "json_extract(oe_defaults_json, '$.frequency')",
+  stopType:         "json_extract(oe_defaults_json, '$.stopType')",
+  notes1:           "json_extract(oe_defaults_json, '$.notes1')",
+  notes2:           "json_extract(oe_defaults_json, '$.notes2')",
+  prnReason:        "json_extract(oe_defaults_json, '$.prnReason')",
+  dispenseCategory: "json_extract(dispense_json, '$.dispenseCategory')",
+  therapeuticClass: "json_extract(clinical_json, '$.therapeuticClass')",
+  orderAlert1:      "json_extract(clinical_json, '$.orderAlert1')",
 }
 
 export async function searchFormulary({
@@ -194,21 +208,29 @@ export async function searchFormulary({
   }
 
   if (q) {
-    const isWildcard = q.includes('*')
-    const likeQ = isWildcard ? q.replace(/\*/g, '%') : `${q}%`
+    const inMatch = q.match(/^IN\(([^)]+)\)$/i)
     const scopedCol = field ? FIELD_DB_COL[field] : null
-    if (scopedCol) {
-      // Single-field scoped search
-      conditions.push(`${scopedCol} LIKE ?`)
-      sqlArgs.push(likeQ)
+    if (inMatch && scopedCol) {
+      // IN query: exact case-insensitive match against comma-separated values
+      const inVals = inMatch[1].split(',').map(v => v.trim()).filter(Boolean)
+      conditions.push(`LOWER(${scopedCol}) IN (${inVals.map(() => '?').join(',')})`)
+      sqlArgs.push(...inVals.map(v => v.toLowerCase()))
     } else {
-      // All-field search (default)
-      conditions.push(
-        '(description LIKE ? OR generic_name LIKE ? OR mnemonic LIKE ? OR ' +
-        'charge_number LIKE ? OR brand_name LIKE ? OR brand_name2 LIKE ? OR ' +
-        'brand_name3 LIKE ? OR pyxis_id LIKE ?)'
-      )
-      for (let i = 0; i < 8; i++) sqlArgs.push(likeQ)
+      const isWildcard = q.includes('*')
+      const likeQ = isWildcard ? q.replace(/\*/g, '%') : `${q}%`
+      if (scopedCol) {
+        // Single-field scoped search
+        conditions.push(`${scopedCol} LIKE ?`)
+        sqlArgs.push(likeQ)
+      } else {
+        // All-field search (default)
+        conditions.push(
+          '(description LIKE ? OR generic_name LIKE ? OR mnemonic LIKE ? OR ' +
+          'charge_number LIKE ? OR brand_name LIKE ? OR brand_name2 LIKE ? OR ' +
+          'brand_name3 LIKE ? OR pyxis_id LIKE ?)'
+        )
+        for (let i = 0; i < 8; i++) sqlArgs.push(likeQ)
+      }
     }
   }
 

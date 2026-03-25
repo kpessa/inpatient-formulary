@@ -57,6 +57,10 @@ function matchesRuleValue(field: string, operator: string, value: string, rawVal
       const regexStr = value.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
       try { return new RegExp(regexStr, 'i').test(rawVal) } catch { return false }
     }
+    case 'in': {
+      const vals = value.split(',').map(v => v.trim().toLowerCase())
+      return vals.includes(rawVal.toLowerCase())
+    }
     default:               return rawVal === value
   }
 }
@@ -80,6 +84,10 @@ function buildRuleClause(
       // value uses * wildcards → translate to SQL LIKE %
       const likeVal = value.replace(/[%_]/g, c => `\\${c}`).replace(/\*/g, '%')
       return { clause: 'LIKE ?', args: [likeVal] }
+    }
+    case 'in': {
+      const vals = value.split(',').map(v => v.trim()).filter(Boolean)
+      return { clause: `IN (${vals.map(() => '?').join(',')})`, args: vals }
     }
     default:               return { clause: '= ?',     args: [value] }
   }

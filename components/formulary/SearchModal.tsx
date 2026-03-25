@@ -28,6 +28,8 @@ import { TherapeuticClassPicker } from "./TherapeuticClassPicker"
 import { tcDescendants, tcLabel } from "@/lib/therapeutic-class-map"
 import { FieldFilterSelect, FilterChips, type AdvFilterItem } from "./FieldFilterSelect"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import { type ClauseToken, type OpToken, type QueryToken, type QueryState, parseQueryToState, serializeQueryCompact, evaluateQueryState } from "./QueryBuilder"
+import { QueryBuilder } from "./QueryBuilder"
 
 type UnifiedResult = SearchResult & { _allDomains: string[] }
 
@@ -222,30 +224,293 @@ const FIELD_ALIASES: Record<string, string> = {
   brand: 'brand',             brandname: 'brand',
   charge: 'charge',           chargenumber: 'charge',
   pyxis: 'pyxis',             pyxisid: 'pyxis',
+  dosageform: 'dosageForm',   dosage: 'dosageForm',
+  strength: 'strength',
+  status: 'status',
+  formularystatus: 'formularyStatus',
+  dose: 'dose',
+  route: 'route',
+  frequency: 'frequency',
+  stoptype: 'stopType',
+  notes1: 'notes1', notes2: 'notes2',
+  prnreason: 'prnReason',
+  dispensecategory: 'dispenseCategory',
+  therapeuticclass: 'therapeuticClass',
+  orderalert: 'orderAlert1', orderalert1: 'orderAlert1',
 }
+
+// Field catalog for the token picker dropdown
+const FIELD_CATALOG = [
+  { group: 'Quick (indexed)', fields: [
+    { key: 'description',    label: 'Description' },
+    { key: 'generic',        label: 'Generic Name' },
+    { key: 'mnemonic',       label: 'Mnemonic' },
+    { key: 'brand',          label: 'Brand Name' },
+    { key: 'charge',         label: 'Charge #' },
+    { key: 'pyxis',          label: 'Pyxis ID' },
+    { key: 'dosageForm',     label: 'Dosage Form' },
+    { key: 'strength',       label: 'Strength' },
+    { key: 'status',         label: 'Status' },
+    { key: 'formularyStatus',label: 'Formulary Status' },
+  ]},
+  { group: 'OE Defaults', fields: [
+    { key: 'dose',      label: 'Dose' },
+    { key: 'route',     label: 'Route' },
+    { key: 'frequency', label: 'Frequency' },
+    { key: 'stopType',  label: 'Stop Type' },
+    { key: 'notes1',    label: 'Notes 1' },
+    { key: 'notes2',    label: 'Notes 2' },
+    { key: 'prnReason', label: 'PRN Reason' },
+  ]},
+  { group: 'Dispense', fields: [
+    { key: 'dispenseCategory', label: 'Dispense Category' },
+  ]},
+  { group: 'Clinical', fields: [
+    { key: 'therapeuticClass', label: 'Therapeutic Class' },
+    { key: 'orderAlert1',      label: 'Order Alert' },
+  ]},
+]
 
 type QueryClause = { field: string | null; value: string }
 type ParsedQuery = { clauses: QueryClause[]; isAdvanced: boolean }
 
+// Convert QueryState → legacy ParsedQuery for save-as-category compatibility
+function queryStateToParsedQuery(state: QueryState): ParsedQuery {
+  const clauses = state.tokens
+    .filter((t): t is ClauseToken => t.type === 'clause')
+    .map(c => ({ field: c.field, value: c.value }))
+  return { clauses: clauses.length > 0 ? clauses : [{ field: null, value: '' }], isAdvanced: state.isAdvanced }
+}
+
 function parseAdvancedQuery(raw: string): ParsedQuery {
-  // Split on " OR " (case-insensitive, with surrounding whitespace)
-  const parts = raw.trim().split(/\s+OR\s+/i)
-  const clauses: QueryClause[] = []
-  for (const part of parts) {
-    const t = part.trim()
-    if (!t) continue
-    // Match field:"value" or field:value (no spaces in unquoted value)
-    const m = t.match(/^(\w+):"([^"]*)"$/) ?? t.match(/^(\w+):(\S+)$/)
-    if (m) {
-      const alias = m[1].toLowerCase().replace(/[^a-z]/g, '')
-      clauses.push({ field: FIELD_ALIASES[alias] ?? null, value: m[2] })
+  const state = parseQueryToState(raw, FIELD_ALIASES, ALL_CATALOG_FIELDS)
+  return queryStateToParsedQuery(state)
+}
+
+// ---------------------------------------------------------------------------
+// TokenSearchInput — pill-based search bar with field picker dropdown
+// ---------------------------------------------------------------------------
+
+type PillToken = { field: string; label: string; value: string }
+
+const ALL_CATALOG_FIELDS = FIELD_CATALOG.flatMap(g => g.fields)
+
+function PillValueInput({ initialValue, onCommit, onRemove, onSearch }: {
+  initialValue: string
+  onCommit: (v: string) => void
+  onRemove: () => void
+  onSearch: (v: string) => void
+}) {
+  const [val, setVal] = useState(initialValue)
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => { ref.current?.focus() }, [])
+  return (
+    <input
+      ref={ref}
+      value={val}
+      onChange={e => setVal(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === '>' || e.key === 'Tab') { e.preventDefault(); onCommit(val) }
+        if (e.key === 'Enter') { onCommit(val); onSearch(val) }
+        if (e.key === 'Backspace' && val === '') { e.preventDefault(); onRemove() }
+        if (e.key === 'Escape') { onRemove() }
+      }}
+      className="bg-transparent border-none outline-none text-white placeholder-white/50"
+      style={{ fontSize: '11px', minWidth: '2ch', width: `${Math.max(val.length + 1, 2)}ch` }}
+      placeholder="value"
+    />
+  )
+}
+
+function TokenSearchInput({
+  value,
+  onChange,
+  onSearch,
+  inputClassName,
+}: {
+  value: string
+  onChange: (v: string) => void
+  onSearch: (serialized: string) => void
+  inputClassName?: string
+}) {
+  const [pills, setPills] = useState<PillToken[]>([])
+  const [textVal, setTextVal] = useState('')
+  const [activePillIdx, setActivePillIdx] = useState<number | null>(null)
+  const [showPicker, setShowPicker] = useState(false)
+  const [pickerHl, setPickerHl] = useState(0)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const trailingRef = useRef<HTMLInputElement>(null)
+  const pickerRect = useRef<DOMRect | null>(null)
+  const [, forceRender] = useState(0)
+
+  function serialize(ps: PillToken[], text: string): string {
+    const parts: string[] = ps.map(p => `<${p.field}: ${p.value}>`)
+    const t = text.trim()
+    if (t) parts.push(t)
+    return parts.join(' OR ')
+  }
+
+  // Sync external value changes (clear, recent search, searchTrigger)
+  useEffect(() => {
+    const current = serialize(pills, textVal)
+    if (value === current) return
+    if (!value) { setPills([]); setTextVal(''); setActivePillIdx(null); return }
+    // Parse angle-bracket tokens from new value
+    const anglePattern = /<(\w+):\s*([^>]*)>/g
+    const newPills: PillToken[] = []
+    let m: RegExpExecArray | null
+    while ((m = anglePattern.exec(value)) !== null) {
+      const key = m[1]
+      const label = ALL_CATALOG_FIELDS.find(f => f.key === key)?.label ?? key
+      newPills.push({ field: key, label, value: m[2].trim() })
+    }
+    const remainder = value.replace(/<\w+:\s*[^>]*>/g, '').trim()
+    setPills(newPills)
+    setTextVal(remainder)
+    setActivePillIdx(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+
+  function openPicker() {
+    // Capture picker position from wrapper
+    if (wrapperRef.current) pickerRect.current = wrapperRef.current.getBoundingClientRect()
+    setShowPicker(true)
+    setPickerHl(0)
+    forceRender(n => n + 1)
+  }
+
+  function handleTextChange(v: string) {
+    if (v.endsWith('<')) {
+      setTextVal(v.slice(0, -1))
+      openPicker()
     } else {
-      clauses.push({ field: null, value: t })
+      setTextVal(v)
+      onChange(serialize(pills, v))
     }
   }
-  if (clauses.length === 0) clauses.push({ field: null, value: raw.trim() })
-  const isAdvanced = clauses.length > 1 || clauses.some(c => c.field !== null)
-  return { clauses, isAdvanced }
+
+  function selectField(f: typeof ALL_CATALOG_FIELDS[0]) {
+    const newPill: PillToken = { field: f.key, label: f.label, value: '' }
+    const newPills = [...pills, newPill]
+    setPills(newPills)
+    setActivePillIdx(newPills.length - 1)
+    setShowPicker(false)
+  }
+
+  function commitActivePill(val: string) {
+    if (activePillIdx === null) return
+    const newPills = pills.map((p, i) => i === activePillIdx ? { ...p, value: val } : p)
+    setPills(newPills)
+    setActivePillIdx(null)
+    const ser = serialize(newPills, textVal)
+    onChange(ser)
+    setTimeout(() => trailingRef.current?.focus(), 0)
+  }
+
+  function removeActivePill() {
+    if (activePillIdx === null) return
+    const newPills = pills.filter((_, i) => i !== activePillIdx)
+    setPills(newPills)
+    setActivePillIdx(null)
+    const ser = serialize(newPills, textVal)
+    onChange(ser)
+    setTimeout(() => trailingRef.current?.focus(), 0)
+  }
+
+  function removePill(i: number) {
+    const newPills = pills.filter((_, idx) => idx !== i)
+    setPills(newPills)
+    const ser = serialize(newPills, textVal)
+    onChange(ser)
+    trailingRef.current?.focus()
+  }
+
+  const rect = pickerRect.current
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={`flex items-center flex-wrap gap-x-1 gap-y-0.5 bg-white border border-t-[#808080] border-l-[#808080] border-b-white border-r-white px-1 py-px shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] cursor-text ${inputClassName ?? ''}`}
+      style={{ minHeight: '20px' }}
+      onClick={() => { if (activePillIdx === null) trailingRef.current?.focus() }}
+    >
+      {/* Committed pills */}
+      {pills.map((pill, i) =>
+        activePillIdx === i ? (
+          <span key={i} style={{ background: '#316AC5' }} className="flex items-center text-white px-1 py-px gap-0.5 shrink-0">
+            <span className="font-bold text-[11px]">{pill.label}:</span>
+            <PillValueInput
+              initialValue={pill.value}
+              onCommit={commitActivePill}
+              onRemove={removeActivePill}
+              onSearch={(v) => { commitActivePill(v); onSearch(serialize(pills.map((p, idx) => idx === i ? { ...p, value: v } : p), textVal)) }}
+            />
+          </span>
+        ) : (
+          <span key={i} style={{ background: '#316AC5', color: 'white' }} className="flex items-center text-[11px] px-1 py-px gap-0.5 shrink-0">
+            <span className="font-bold">{pill.label}:</span>
+            <span>{pill.value || '…'}</span>
+            <button
+              onMouseDown={e => { e.preventDefault(); removePill(i) }}
+              className="ml-0.5 opacity-70 hover:opacity-100 leading-none text-white"
+              tabIndex={-1}
+            >×</button>
+          </span>
+        )
+      )}
+      {/* Trailing text input — only when no pill is being edited */}
+      {activePillIdx === null && (
+        <input
+          ref={trailingRef}
+          value={textVal}
+          onChange={e => handleTextChange(e.target.value)}
+          onKeyDown={e => {
+            if (showPicker) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setPickerHl(h => Math.min(h + 1, ALL_CATALOG_FIELDS.length - 1)); return }
+              if (e.key === 'ArrowUp')   { e.preventDefault(); setPickerHl(h => Math.max(h - 1, 0)); return }
+              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); selectField(ALL_CATALOG_FIELDS[pickerHl]); return }
+              if (e.key === 'Escape')    { setShowPicker(false); return }
+            }
+            if (e.key === 'Escape') { onChange(''); setPills([]); setTextVal('') }
+            if (e.key === 'Enter')  { onSearch(serialize(pills, textVal)) }
+            if (e.key === 'Backspace' && textVal === '' && pills.length > 0) { removePill(pills.length - 1) }
+          }}
+          className="flex-1 min-w-[60px] border-none outline-none bg-transparent font-sans text-black"
+          style={{ fontSize: '11px', height: '18px' }}
+        />
+      )}
+      {/* Field picker dropdown */}
+      {showPicker && rect && createPortal(
+        <div
+          style={{ position: 'fixed', top: rect.bottom + 2, left: rect.left, zIndex: 99999 }}
+          className="bg-white border-2 border-[#808080] shadow-[2px_2px_6px_rgba(0,0,0,0.35)] min-w-[200px] max-h-[300px] overflow-y-auto"
+          onMouseDown={e => e.preventDefault()}
+        >
+          {FIELD_CATALOG.map(group => (
+            <div key={group.group}>
+              <div className="text-[10px] font-bold text-[#505050] bg-[#D4D0C8] px-2 py-px uppercase tracking-wide select-none">
+                {group.group}
+              </div>
+              {group.fields.map(f => {
+                const globalIdx = ALL_CATALOG_FIELDS.findIndex(af => af.key === f.key)
+                return (
+                  <div
+                    key={f.key}
+                    onMouseDown={() => selectField(f)}
+                    onMouseEnter={() => setPickerHl(globalIdx)}
+                    className={`px-3 py-0.5 text-xs cursor-default select-none ${globalIdx === pickerHl ? 'bg-[#316AC5] text-white' : 'hover:bg-[#D4D0C8]'}`}
+                  >
+                    {f.label}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>,
+        document.body
+      )}
+    </div>
+  )
 }
 
 function classifyActiveFields(q: string, activeFields: Set<string>): Set<string> {
@@ -268,6 +533,7 @@ function classifyActiveFields(q: string, activeFields: Set<string>): Set<string>
 export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState("")
+  const [inputValue, setInputValue] = useState("")  // what TokenSearchInput displays (cleared on submit)
   const [scope, setScope] = useState<Scope>(initialScope)
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('pharmnet-recent-searches') ?? '[]') } catch { return [] }
@@ -438,6 +704,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const [saveCatDialog, setSaveCatDialog] = useState<{ name: string; color: string; saving: boolean } | null>(null)
   // Parsed advanced query: updated whenever a search completes successfully
   const [lastParsedQuery, setLastParsedQuery] = useState<ParsedQuery | null>(null)
+  const [queryState, setQueryState] = useState<QueryState | null>(null)
+  const [queryMode, setQueryMode] = useState<'compact' | 'visual'>('compact')
   const [catPicker, setCatPicker] = useState<{ x: number; y: number; groupId: string; description: string; categories: DrugCategory[]; selected: Set<string>; saving: boolean } | null>(null)
   const [total, setTotal] = useState(0)
   const [pendingTotal, setPendingTotal] = useState<number | null>(null)
@@ -848,21 +1116,19 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
         return clauseResults
       }
 
-      // Multi-clause OR: fire parallel requests per clause, merge results
-      if (parsed.clauses.length > 1) {
-        const clauseResultSets = await Promise.all(parsed.clauses.map(fetchClause))
-        const seen = new Set<string>()
-        const finalResults: SearchResult[] = []
-        for (const crs of clauseResultSets) {
-          for (const r of crs) {
-            const key = `${r.groupId}|${r.region}|${r.environment}`
-            if (!seen.has(key)) { seen.add(key); finalResults.push(r) }
-          }
-        }
+      // Multi-clause (AND/OR/NOT/groups): use evaluateQueryState for full boolean logic
+      const qs = parseQueryToState(query, FIELD_ALIASES, ALL_CATALOG_FIELDS)
+      setQueryState(qs)
+      if (qs.tokens.filter(t => t.type === 'clause').length > 1 ||
+          qs.tokens.some(t => t.type === 'op' && (t as OpToken).op === 'AND') ||
+          qs.tokens.some(t => t.type === 'clause' && (t as ClauseToken).negated)) {
+        const finalResults = await evaluateQueryState(qs, (field, value) =>
+          fetchClause({ field, value })
+        )
         setResults(finalResults)
         setTotal(finalResults.length)
         setQueryMs(Math.round(performance.now() - t0))
-        setLastParsedQuery(parsed)
+        setLastParsedQuery(queryStateToParsedQuery(qs))
         setTimeout(() => loadDetails(finalResults, gen), 0)
         setTimeout(() => loadCategories(finalResults, gen), 0)
         return
@@ -881,12 +1147,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
         setTotal(clauseResults.length)
         setQueryMs(Math.round(performance.now() - t0))
         setLastParsedQuery(parsed)
+        setQueryState(parseQueryToState(query, FIELD_ALIASES, ALL_CATALOG_FIELDS))
         setTimeout(() => loadDetails(clauseResults, gen), 0)
         setTimeout(() => loadCategories(clauseResults, gen), 0)
         return
       }
 
       setLastParsedQuery(parsed)
+      setQueryState(parseQueryToState(query, FIELD_ALIASES, ALL_CATALOG_FIELDS))
 
       // Base params shared by both paths
       const baseParams = new URLSearchParams({ q: effectiveQuery, limit: String(maxResults) })
@@ -1438,19 +1706,37 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 </div>
               </div>
 
-              {/* Query pills — shown when advanced syntax is active */}
-              {lastParsedQuery?.isAdvanced && results.length > 0 && (
-                <div className="flex items-center gap-1 px-1 pt-0.5 flex-wrap shrink-0">
-                  <span className="text-[10px] text-[#808080] font-mono">Query:</span>
-                  {lastParsedQuery.clauses.map((c, i) => (
-                    <span key={i} className="flex items-center gap-0.5">
-                      {i > 0 && <span className="text-[10px] text-[#808080] font-mono font-bold px-0.5">OR</span>}
-                      <span className="text-[10px] font-mono bg-[#F0F0F0] border border-[#B0B0B0] px-1.5 py-0.5 rounded-sm">
-                        {c.field ? <><span className="text-[#316AC5] font-bold">{c.field}</span><span className="text-[#808080]">:</span></> : null}
-                        <span className="text-black">&quot;{c.value}&quot;</span>
-                      </span>
-                    </span>
-                  ))}
+              {/* Visual Query Builder — shown when query has tokens */}
+              {queryState && queryState.tokens.length > 0 && (
+                <div className="shrink-0 border border-[#D0D0D0] bg-[#FAFAFA] mx-1 mt-0.5">
+                  <div className="flex items-center justify-between px-1 py-px border-b border-[#D0D0D0]">
+                    <span className="text-[9px] text-[#808080] font-mono uppercase tracking-wide">Query</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setQueryMode(m => m === 'compact' ? 'visual' : 'compact')}
+                        className="text-[9px] px-1 py-px border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] text-black"
+                        title="Toggle compact/visual mode"
+                      >
+                        {queryMode === 'compact' ? '⊞ Visual' : '⊟ Compact'}
+                      </button>
+                    </div>
+                  </div>
+                  <QueryBuilder
+                    state={queryState}
+                    mode={queryMode}
+                    onTokensChange={newTokens => {
+                      const newState = { ...queryState, tokens: newTokens, parensValid: newTokens.every(t => t.type !== 'lparen' && t.type !== 'rparen') || (() => { let d = 0; for (const t of newTokens) { if (t.type === 'lparen') d++; else if (t.type === 'rparen') { d--; if (d < 0) return false; } } return d === 0 })() }
+                      setQueryState(newState)
+                      const ser = serializeQueryCompact(newTokens)
+                      setSearchValue(ser)
+                    }}
+                    onEditClause={clause => {
+                      // Load this clause into the search bar for editing
+                      const ser = clause.field ? `<${clause.field}: ${clause.value}>` : clause.value
+                      setSearchValue(ser)
+                      setInputValue(ser)
+                    }}
+                  />
                 </div>
               )}
 
@@ -1458,20 +1744,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
               <div className="flex items-center gap-2 mt-1 shrink-0 px-1">
                 <span className="text-xs">Search for:</span>
                 <div className="flex items-center">
-                  <Input
-                    value={searchValue}
-                    onChange={e => setSearchValue(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === "Escape") { setSearchValue(""); return }
-                      if (e.key === "Enter") {
-                        handleSearch()
-                      }
-                    }}
-                    className="h-5 text-xs font-sans rounded-none border-t-[#808080] border-l-[#808080] border-b-white border-r-white border px-1 py-0 w-64 bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus-visible:ring-0 focus-visible:ring-offset-0"
+                  <TokenSearchInput
+                    value={inputValue}
+                    onChange={s => { setInputValue(s); setSearchValue(s); setQueryState(parseQueryToState(s, FIELD_ALIASES, ALL_CATALOG_FIELDS)) }}
+                    onSearch={s => { setInputValue(''); handleSearch(s) }}
+                    inputClassName="w-64 text-xs font-sans rounded-none border"
                   />
                   <button
-                    onClick={() => setSearchValue("")}
-                    className={`h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default ${searchValue ? '' : 'invisible pointer-events-none'}`}
+                    onClick={() => { setSearchValue(''); setInputValue(''); setQueryState(null) }}
+                    className={`h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default ${searchValue || inputValue ? '' : 'invisible pointer-events-none'}`}
                     title="Clear search (Esc)"
                     tabIndex={-1}
                   >
@@ -1479,7 +1760,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   </button>
                   <RecentSearchDropdown
                     recentSearches={recentSearches}
-                    onSelect={s => { setSearchValue(s); handleSearch(s) }}
+                    onSelect={s => { setSearchValue(s); setInputValue(s); handleSearch(s) }}
                     onClear={() => {
                       setRecentSearches([])
                       try { localStorage.removeItem('pharmnet-recent-searches') } catch {}
@@ -1489,7 +1770,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 <button
                   onClick={() => handleSearch()}
                   className="h-6 px-4 border border-[#808080] text-black bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] active:border-t-black active:border-l-black flex items-center justify-center text-xs ml-auto shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
-                  title="Tip: description:&quot;*half*&quot; OR description:&quot;*1/2*&quot;"
+                  title="Type &lt; to pick a field · description:&quot;*half*&quot; OR description:&quot;*1/2*&quot;"
                 >
                   Search
                 </button>
@@ -2495,13 +2776,24 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                               // 2. Create one rule per clause
                               for (const clause of lastParsedQuery.clauses) {
                                 const field = clause.field ?? 'description'
-                                const value = clause.value.replace(/\*/g, '').trim()
-                                if (!value) continue
-                                await fetch(`/api/categories/${catId}/rules`, {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ field, operator: 'contains', value }),
-                                })
+                                const inMatch = clause.value.match(/^IN\(([^)]+)\)$/i)
+                                if (inMatch) {
+                                  const value = inMatch[1].trim()
+                                  if (!value) continue
+                                  await fetch(`/api/categories/${catId}/rules`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ field, operator: 'in', value }),
+                                  })
+                                } else {
+                                  const value = clause.value.replace(/\*/g, '').trim()
+                                  if (!value) continue
+                                  await fetch(`/api/categories/${catId}/rules`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ field, operator: 'contains', value }),
+                                  })
+                                }
                               }
                               // 3. Add exclusions
                               for (const semKey of excludedKeys) {
