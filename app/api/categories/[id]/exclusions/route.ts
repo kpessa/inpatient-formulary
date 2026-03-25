@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { listExclusions, addExclusion, removeExclusion } from '@/lib/categories-db'
+import { listExclusions, addExclusion, removeExclusion, clearExclusions } from '@/lib/categories-db'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -30,14 +30,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    const body = await req.json() as { groupId: string }
-    if (!body.groupId) {
-      return NextResponse.json({ error: 'groupId is required' }, { status: 400 })
+    const body = await req.json().catch(() => ({})) as { groupId?: string }
+    if (body.groupId) {
+      await removeExclusion(id, body.groupId)
+    } else {
+      await clearExclusions(id)
     }
-    await removeExclusion(id, body.groupId)
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('DELETE /api/categories/[id]/exclusions', err)
-    return NextResponse.json({ error: 'Failed to remove exclusion' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to remove exclusion(s)' }, { status: 500 })
   }
 }

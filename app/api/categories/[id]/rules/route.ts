@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { addRule, removeRule } from '@/lib/categories-db'
+import { addRule, removeRule, clearRules } from '@/lib/categories-db'
 import type { CategoryRule } from '@/lib/types'
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -23,15 +23,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await params
-    const body = await req.json() as { ruleId: string }
-    if (!body.ruleId) {
-      return NextResponse.json({ error: 'ruleId is required' }, { status: 400 })
+    const { id } = await params
+    const body = await req.json().catch(() => ({})) as { ruleId?: string }
+    if (body.ruleId) {
+      await removeRule(body.ruleId)
+    } else {
+      await clearRules(id)
     }
-    await removeRule(body.ruleId)
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('DELETE /api/categories/[id]/rules', err)
-    return NextResponse.json({ error: 'Failed to remove rule' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to remove rule(s)' }, { status: 500 })
   }
 }

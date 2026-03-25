@@ -659,6 +659,38 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     }
   }
 
+  // Shared helper: write current query rules + advFilter rules + exclusions to a category
+  async function saveRulesAndExclusions(catId: string) {
+    const posts: Promise<unknown>[] = []
+    const postRule = (body: object) => posts.push(
+      fetch(`/api/categories/${catId}/rules`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    )
+    // Query clause rules
+    for (const clause of lastParsedQuery?.clauses ?? []) {
+      const field = clause.field ?? 'description'
+      const inMatch = clause.value.match(/^IN\(([^)]+)\)$/i)
+      if (inMatch) { const v = inMatch[1].trim(); if (v) postRule({ field, operator: 'in', value: v }) }
+      else { const v = clause.value.replace(/\*/g, '').trim(); if (v) postRule({ field, operator: 'contains', value: v }) }
+    }
+    // advFilter rules
+    for (const item of advFilter.dfItems)
+      if (item.op === 'include' && item.values.length > 0) postRule({ field: 'dosageForm', operator: 'in', value: item.values.join(',') })
+    for (const item of advFilter.rtItems)
+      if (item.op === 'include' && item.values.length > 0) postRule({ field: 'route', operator: 'in', value: item.values.join(',') })
+    for (const item of advFilter.dcItems)
+      if (item.op === 'include' && item.values.length > 0) postRule({ field: 'dispenseCategory', operator: 'in', value: item.values.join(',') })
+    for (const item of advFilter.tcItems)
+      if (item.op === 'include') postRule({ field: 'therapeuticClass', operator: 'equals', value: item.id })
+    // Exclusions
+    for (const semKey of excludedKeys) {
+      const result = displayedResults.find(r => getSemanticKey(r) === semKey) ?? sortedResults.find(r => getSemanticKey(r) === semKey)
+      if (result) posts.push(
+        fetch(`/api/categories/${catId}/exclusions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: result.groupId, drugDescription: result.description }) })
+      )
+    }
+    await Promise.all(posts)
+  }
+
   const handleCategorySelect = async (catId: string) => {
     setCategoryFilter(catId)
     if (!catId) {
@@ -783,7 +815,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const [isSelecting, setIsSelecting] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string; groupId?: string; description?: string; semanticKey?: string } | null>(null)
   const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set())
-  const [saveCatDialog, setSaveCatDialog] = useState<{ name: string; color: string; saving: boolean } | null>(null)
+  const [saveCatDialog, setSaveCatDialog] = useState<{ name: string; color: string; saving: boolean; updateCategoryId?: string } | null>(null)
   // Parsed advanced query: updated whenever a search completes successfully
   const [lastParsedQuery, setLastParsedQuery] = useState<ParsedQuery | null>(null)
   const [queryState, setQueryState] = useState<QueryState | null>(null)
@@ -1894,16 +1926,21 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     </>
                   )
                 })()}
-                {lastParsedQuery?.isAdvanced && displayedResults.length > 0 && (
+                {(lastParsedQuery?.isAdvanced || categoryFilter) && displayedResults.length > 0 && (
                   <button
                     onClick={() => {
-                      const qName = lastParsedQuery.clauses.map(c => c.value.replace(/\*/g, '').trim()).filter(Boolean).join(' / ')
-                      setSaveCatDialog({ name: qName || 'New Category', color: '#6B7280', saving: false })
+                      const qName = lastParsedQuery?.clauses.map(c => c.value.replace(/\*/g, '').trim()).filter(Boolean).join(' / ') ?? ''
+                      if (categoryFilter) {
+                        const cat = allCategories.find(c => c.id === categoryFilter)
+                        setSaveCatDialog({ name: cat?.name ?? qName || 'New Category', color: cat?.color ?? '#6B7280', saving: false, updateCategoryId: categoryFilter })
+                      } else {
+                        setSaveCatDialog({ name: qName || 'New Category', color: '#6B7280', saving: false })
+                      }
                     }}
                     className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] whitespace-nowrap"
                     title="Save search as a Category with rules + exclusions"
                   >
-                    ⊞ Save as Category…
+                    ⊞ {categoryFilter ? 'Update / Save Category…' : 'Save as Category…'}
                   </button>
                 )}
                 {lintPatterns.length > 0 && (
@@ -2849,80 +2886,56 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         >
                           Cancel
                         </button>
+                        {/* Update existing category — only shown when one is selected */}
+                        {saveCatDialog.updateCategoryId && (
+                          <button
+                            disabled={saveCatDialog.saving || !saveCatDialog.name.trim()}
+                            onClick={async () => {
+                              const catId = saveCatDialog.updateCategoryId!
+                              setSaveCatDialog(p => p ? { ...p, saving: true } : p)
+                              try {
+                                // Clear existing rules and exclusions, then re-add current state
+                                await Promise.all([
+                                  fetch(`/api/categories/${catId}/rules`, { method: 'DELETE' }),
+                                  fetch(`/api/categories/${catId}/exclusions`, { method: 'DELETE' }),
+                                ])
+                                // Update name/color if changed
+                                const existing = allCategories.find(c => c.id === catId)
+                                if (saveCatDialog.name.trim() !== existing?.name || saveCatDialog.color !== existing?.color) {
+                                  await fetch(`/api/categories/${catId}`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ name: saveCatDialog.name.trim(), color: saveCatDialog.color }),
+                                  })
+                                }
+                                await saveRulesAndExclusions(catId)
+                                setSaveCatDialog(null)
+                              } catch { setSaveCatDialog(p => p ? { ...p, saving: false } : p) }
+                            }}
+                            className="px-3 py-0.5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] text-xs disabled:opacity-50"
+                          >
+                            {saveCatDialog.saving ? 'Saving…' : `Update "${saveCatDialog.name}"`}
+                          </button>
+                        )}
+                        {/* Save as new category — always shown */}
                         <button
                           disabled={saveCatDialog.saving || !saveCatDialog.name.trim()}
                           onClick={async () => {
-                            if (!lastParsedQuery) return
                             setSaveCatDialog(p => p ? { ...p, saving: true } : p)
                             try {
-                              // 1. Create category
                               const catRes = await fetch('/api/categories', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ name: saveCatDialog.name.trim(), description: '', color: saveCatDialog.color }),
                               })
                               const { category } = await catRes.json() as { category: { id: string } }
-                              const catId = category.id
-                              // 2. Create one rule per clause
-                              for (const clause of lastParsedQuery.clauses) {
-                                const field = clause.field ?? 'description'
-                                const inMatch = clause.value.match(/^IN\(([^)]+)\)$/i)
-                                if (inMatch) {
-                                  const value = inMatch[1].trim()
-                                  if (!value) continue
-                                  await fetch(`/api/categories/${catId}/rules`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ field, operator: 'in', value }),
-                                  })
-                                } else {
-                                  const value = clause.value.replace(/\*/g, '').trim()
-                                  if (!value) continue
-                                  await fetch(`/api/categories/${catId}/rules`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ field, operator: 'contains', value }),
-                                  })
-                                }
-                              }
-                              // 3. Save advFilter items as rules
-                              const advRules: Array<{ field: string; operator: string; value: string }> = []
-                              for (const item of advFilter.dfItems)
-                                if (item.op === 'include' && item.values.length > 0)
-                                  advRules.push({ field: 'dosageForm', operator: 'in', value: item.values.join(',') })
-                              for (const item of advFilter.rtItems)
-                                if (item.op === 'include' && item.values.length > 0)
-                                  advRules.push({ field: 'route', operator: 'in', value: item.values.join(',') })
-                              for (const item of advFilter.dcItems)
-                                if (item.op === 'include' && item.values.length > 0)
-                                  advRules.push({ field: 'dispenseCategory', operator: 'in', value: item.values.join(',') })
-                              for (const item of advFilter.tcItems)
-                                if (item.op === 'include')
-                                  advRules.push({ field: 'therapeuticClass', operator: 'equals', value: item.id })
-                              for (const r of advRules) {
-                                await fetch(`/api/categories/${catId}/rules`, {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify(r),
-                                })
-                              }
-                              // 4. Add exclusions
-                              for (const semKey of excludedKeys) {
-                                const result = displayedResults.find(r => getSemanticKey(r) === semKey) ??
-                                               sortedResults.find(r => getSemanticKey(r) === semKey)
-                                if (!result) continue
-                                await fetch(`/api/categories/${catId}/exclusions`, {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ groupId: result.groupId, drugDescription: result.description }),
-                                })
-                              }
+                              await saveRulesAndExclusions(category.id)
                               setSaveCatDialog(null)
                             } catch { setSaveCatDialog(p => p ? { ...p, saving: false } : p) }
                           }}
                           className="px-3 py-0.5 border border-[#316AC5] bg-[#316AC5] text-white hover:bg-[#1a4a9a] text-xs disabled:opacity-50"
                         >
-                          {saveCatDialog.saving ? 'Saving…' : 'Save'}
+                          {saveCatDialog.saving ? 'Saving…' : (saveCatDialog.updateCategoryId ? 'Save as New' : 'Save')}
                         </button>
                       </div>
                     </div>

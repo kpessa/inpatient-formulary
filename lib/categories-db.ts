@@ -219,6 +219,11 @@ export async function removeExclusion(categoryId: string, groupId: string): Prom
   })
 }
 
+export async function clearExclusions(categoryId: string): Promise<void> {
+  const db = getDb()
+  await db.execute({ sql: 'DELETE FROM category_exclusions WHERE category_id = ?', args: [categoryId] })
+}
+
 export async function resolveCategoryMembers(categoryId: string): Promise<CategoryMember[]> {
   const db = getDb()
 
@@ -286,6 +291,11 @@ export async function addRule(
 export async function removeRule(ruleId: string): Promise<void> {
   const db = getDb()
   await db.execute({ sql: 'DELETE FROM category_rules WHERE id = ?', args: [ruleId] })
+}
+
+export async function clearRules(categoryId: string): Promise<void> {
+  const db = getDb()
+  await db.execute({ sql: 'DELETE FROM category_rules WHERE category_id = ?', args: [categoryId] })
 }
 
 // ---------------------------------------------------------------------------
