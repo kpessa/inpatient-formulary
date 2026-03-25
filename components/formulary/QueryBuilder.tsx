@@ -197,7 +197,14 @@ export async function evaluateQueryState<T extends AnyResult>(
     let left = parseAnd()
     while (peek()?.type === 'op' && (peek() as OpToken).op === 'OR') {
       consume()
-      left = union(left, parseAnd())
+      const next = peek()
+      // OR NOT → subtract (exclude matching results)
+      if (next?.type === 'clause' && (next as ClauseToken).negated) {
+        consume()
+        left = subtract(left, resultMap.get((next as ClauseToken).id) ?? [])
+      } else {
+        left = union(left, parseAnd())
+      }
     }
     return left
   }
@@ -261,9 +268,9 @@ export function rulesToQueryState(
       default:            valueStr = rule.value
     }
     const fieldLabel = fieldLabels[rule.field] ?? rule.field
-    tokens.push({ id: rule.id, type: 'clause', field: rule.field, fieldLabel, value: valueStr, negated: false })
+    tokens.push({ id: rule.id, type: 'clause', field: rule.field, fieldLabel, value: valueStr, negated: rule.negated ?? false })
   }
-  const isAdvanced = rules.length > 1 || rules.some(r => r.field !== 'description')
+  const isAdvanced = rules.length > 1 || rules.some(r => r.field !== 'description' || r.negated)
   return { tokens, isAdvanced, parensValid: true }
 }
 
@@ -391,7 +398,7 @@ export function QueryBuilder({ state, mode, onTokensChange, onEditClause }: Quer
                 title="Click to edit"
               >
                 {c.negated && <span className="font-bold text-[#CC0000] mr-0.5">NOT</span>}
-                {c.field && <span className="font-bold">{c.fieldLabel}:</span>}
+                {c.field && <span className="font-bold cursor-pointer hover:underline" onClick={e => { e.stopPropagation(); toggleNot(c.id) }} title={c.negated ? 'Remove NOT' : 'Add NOT'}>{c.fieldLabel}:</span>}
                 {/^IN\(/i.test(c.value)
                   ? <span className="ml-0.5">{c.value}</span>
                   : <span className="ml-0.5">&quot;{c.value}&quot;</span>}
@@ -499,7 +506,7 @@ export function QueryBuilder({ state, mode, onTokensChange, onEditClause }: Quer
                 )}
                 {/* Field label */}
                 {c.field && (
-                  <span className="text-[11px] font-bold text-[#316AC5] select-none">{c.fieldLabel}:</span>
+                  <span className="text-[11px] font-bold text-[#316AC5] select-none cursor-pointer hover:underline" onClick={e => { e.stopPropagation(); toggleNot(c.id) }} title={c.negated ? 'Remove NOT' : 'Add NOT'}>{c.fieldLabel}:</span>
                 )}
                 {/* Value */}
                 <span className="text-[11px] text-black flex-1 truncate select-none">

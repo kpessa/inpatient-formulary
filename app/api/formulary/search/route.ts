@@ -8,7 +8,7 @@ export type { SearchResult }
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const q = (searchParams.get("q") ?? "").toLowerCase()
-  const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 200)
+  const limit = Math.min(Number(searchParams.get("limit") ?? "20"), 5000)
   const facilitiesParam = searchParams.get("facilities")
   const showInactive = searchParams.get("showInactive") !== "false"
   const region = searchParams.get("region") ?? undefined

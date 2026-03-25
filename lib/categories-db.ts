@@ -23,6 +23,7 @@ function rowToRule(r: Row): CategoryRule {
     field: r.field as CategoryRule['field'],
     operator: r.operator as CategoryRule['operator'],
     value: r.value as string,
+    negated: r.negated === 1 || r.negated === true,
   }
 }
 
@@ -279,14 +280,15 @@ export async function addRule(
   field: CategoryRule['field'],
   operator: CategoryRule['operator'],
   value: string,
+  negated?: boolean,
 ): Promise<CategoryRule> {
   const db = getDb()
   const id = randomUUID()
   await db.execute({
-    sql: `INSERT INTO category_rules (id, category_id, field, operator, value) VALUES (?, ?, ?, ?, ?)`,
-    args: [id, categoryId, field, operator, value],
+    sql: `INSERT INTO category_rules (id, category_id, field, operator, value, negated) VALUES (?, ?, ?, ?, ?, ?)`,
+    args: [id, categoryId, field, operator, value, negated ? 1 : 0],
   })
-  return { id, categoryId, field, operator, value }
+  return { id, categoryId, field, operator, value, negated }
 }
 
 export async function removeRule(ruleId: string): Promise<void> {

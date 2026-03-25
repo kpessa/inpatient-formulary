@@ -322,6 +322,7 @@ export interface CategoryRule {
         | 'description' | 'genericName' | 'mnemonic' | 'brandName'
   operator: 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'matches_regex' | 'in'
   value: string
+  negated?: boolean
 }
 
 export interface CategoryExclusion {

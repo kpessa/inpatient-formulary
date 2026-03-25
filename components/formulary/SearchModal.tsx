@@ -272,14 +272,14 @@ const FIELD_CATALOG = [
   ]},
 ]
 
-type QueryClause = { field: string | null; value: string }
+type QueryClause = { field: string | null; value: string; negated?: boolean }
 type ParsedQuery = { clauses: QueryClause[]; isAdvanced: boolean }
 
 // Convert QueryState → legacy ParsedQuery for save-as-category compatibility
 function queryStateToParsedQuery(state: QueryState): ParsedQuery {
   const clauses = state.tokens
     .filter((t): t is ClauseToken => t.type === 'clause')
-    .map(c => ({ field: c.field, value: c.value }))
+    .map(c => ({ field: c.field, value: c.value, negated: c.negated || undefined }))
   return { clauses: clauses.length > 0 ? clauses : [{ field: null, value: '' }], isAdvanced: state.isAdvanced }
 }
 
@@ -293,7 +293,7 @@ function parseAdvancedQuery(raw: string): ParsedQuery {
 // TokenSearchInput — pill-based search bar with field picker dropdown
 // ---------------------------------------------------------------------------
 
-type PillToken = { field: string; label: string; value: string }
+type PillToken = { field: string; label: string; value: string; negated?: boolean }
 
 const ALL_CATALOG_FIELDS = FIELD_CATALOG.flatMap(g => g.fields)
 
@@ -315,7 +315,7 @@ function PillValueInput({ initialValue, onCommit, onRemove, onSearch }: {
         if (e.key === '>' || e.key === 'Tab') { e.preventDefault(); onCommit(val) }
         if (e.key === 'Enter') { onCommit(val); onSearch(val) }
         if (e.key === 'Backspace' && val === '') { e.preventDefault(); onRemove() }
-        if (e.key === 'Escape') { onRemove() }
+        if (e.key === 'Escape') { onCommit(initialValue) }
       }}
       className="bg-transparent border-none outline-none text-white placeholder-white/50"
       style={{ fontSize: '11px', minWidth: '2ch', width: `${Math.max(val.length + 1, 2)}ch` }}
@@ -346,7 +346,7 @@ function TokenSearchInput({
   const [, forceRender] = useState(0)
 
   function serialize(ps: PillToken[], text: string): string {
-    const parts: string[] = ps.map(p => `<${p.field}: ${p.value}>`)
+    const parts: string[] = ps.map(p => `${p.negated ? 'NOT ' : ''}<${p.field}: ${p.value}>`)
     const t = text.trim()
     if (t) parts.push(t)
     return parts.join(' OR ')
@@ -357,16 +357,17 @@ function TokenSearchInput({
     const current = serialize(pills, textVal)
     if (value === current) return
     if (!value) { setPills([]); setTextVal(''); setActivePillIdx(null); return }
-    // Parse angle-bracket tokens from new value
-    const anglePattern = /<(\w+):\s*([^>]*)>/g
+    // Parse angle-bracket tokens from new value (with optional NOT prefix)
+    const anglePattern = /(?:(NOT)\s+)?<(\w+):\s*([^>]*)>/gi
     const newPills: PillToken[] = []
     let m: RegExpExecArray | null
     while ((m = anglePattern.exec(value)) !== null) {
-      const key = m[1]
+      const negated = !!m[1]
+      const key = m[2]
       const label = ALL_CATALOG_FIELDS.find(f => f.key === key)?.label ?? key
-      newPills.push({ field: key, label, value: m[2].trim() })
+      newPills.push({ field: key, label, value: m[3].trim(), negated })
     }
-    const remainder = value.replace(/<\w+:\s*[^>]*>/g, '').trim()
+    const remainder = value.replace(/(?:NOT\s+)?<\w+:\s*[^>]*>/gi, '').trim()
     setPills(newPills)
     setTextVal(remainder)
     setActivePillIdx(null)
@@ -383,8 +384,12 @@ function TokenSearchInput({
 
   function handleTextChange(v: string) {
     if (v.endsWith('<')) {
-      setTextVal(v.slice(0, -1))
+      setTextVal('')
       openPicker()
+    } else if (showPicker) {
+      // While picker is open, text filters the field list
+      setTextVal(v)
+      setPickerHl(0)
     } else {
       setTextVal(v)
       onChange(serialize(pills, v))
@@ -397,6 +402,7 @@ function TokenSearchInput({
     setPills(newPills)
     setActivePillIdx(newPills.length - 1)
     setShowPicker(false)
+    setTextVal('')
   }
 
   function commitActivePill(val: string) {
@@ -427,6 +433,12 @@ function TokenSearchInput({
     trailingRef.current?.focus()
   }
 
+  function togglePillNegated(i: number) {
+    const newPills = pills.map((p, idx) => idx === i ? { ...p, negated: !p.negated } : p)
+    setPills(newPills)
+    onChange(serialize(newPills, textVal))
+  }
+
   const rect = pickerRect.current
 
   return (
@@ -449,11 +461,21 @@ function TokenSearchInput({
             />
           </span>
         ) : (
-          <span key={i} style={{ background: '#316AC5', color: 'white' }} className="flex items-center text-[11px] px-1 py-px gap-0.5 shrink-0">
-            <span className="font-bold">{pill.label}:</span>
+          <span
+            key={i}
+            style={{ background: pill.negated ? '#CC0000' : '#316AC5', color: 'white' }}
+            className="flex items-center text-[11px] px-1 py-px gap-0.5 shrink-0 cursor-pointer"
+            onClick={e => { e.stopPropagation(); setActivePillIdx(i) }}
+          >
+            {pill.negated && <span className="font-bold text-[#FFAAAA]">NOT</span>}
+            <span
+              className="font-bold hover:underline"
+              onClick={e => { e.stopPropagation(); togglePillNegated(i) }}
+              title={pill.negated ? 'Remove NOT' : 'Add NOT'}
+            >{pill.label}:</span>
             <span>{pill.value || '…'}</span>
             <button
-              onMouseDown={e => { e.preventDefault(); removePill(i) }}
+              onMouseDown={e => { e.preventDefault(); e.stopPropagation(); removePill(i) }}
               className="ml-0.5 opacity-70 hover:opacity-100 leading-none text-white"
               tabIndex={-1}
             >×</button>
@@ -468,12 +490,15 @@ function TokenSearchInput({
           onChange={e => handleTextChange(e.target.value)}
           onKeyDown={e => {
             if (showPicker) {
-              if (e.key === 'ArrowDown') { e.preventDefault(); setPickerHl(h => Math.min(h + 1, ALL_CATALOG_FIELDS.length - 1)); return }
+              const pickerFiltered = textVal
+                ? ALL_CATALOG_FIELDS.filter(f => f.label.toLowerCase().includes(textVal.toLowerCase()) || f.key.toLowerCase().includes(textVal.toLowerCase()))
+                : ALL_CATALOG_FIELDS
+              if (e.key === 'ArrowDown') { e.preventDefault(); setPickerHl(h => Math.min(h + 1, pickerFiltered.length - 1)); return }
               if (e.key === 'ArrowUp')   { e.preventDefault(); setPickerHl(h => Math.max(h - 1, 0)); return }
-              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); selectField(ALL_CATALOG_FIELDS[pickerHl]); return }
-              if (e.key === 'Escape')    { setShowPicker(false); return }
+              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); if (pickerFiltered.length > 0) selectField(pickerFiltered[Math.min(pickerHl, pickerFiltered.length - 1)]); return }
+              if (e.key === 'Escape')    { setShowPicker(false); setTextVal(''); return }
             }
-            if (e.key === 'Escape') { onChange(''); setPills([]); setTextVal('') }
+            if (e.key === 'Escape') { setTextVal(''); trailingRef.current?.blur() }
             if (e.key === 'Enter')  { onSearch(serialize(pills, textVal)) }
             if (e.key === 'Backspace' && textVal === '' && pills.length > 0) { removePill(pills.length - 1) }
           }}
@@ -488,26 +513,37 @@ function TokenSearchInput({
           className="bg-white border-2 border-[#808080] shadow-[2px_2px_6px_rgba(0,0,0,0.35)] min-w-[200px] max-h-[300px] overflow-y-auto"
           onMouseDown={e => e.preventDefault()}
         >
-          {FIELD_CATALOG.map(group => (
-            <div key={group.group}>
-              <div className="text-[10px] font-bold text-[#505050] bg-[#D4D0C8] px-2 py-px uppercase tracking-wide select-none">
-                {group.group}
-              </div>
-              {group.fields.map(f => {
-                const globalIdx = ALL_CATALOG_FIELDS.findIndex(af => af.key === f.key)
-                return (
-                  <div
-                    key={f.key}
-                    onMouseDown={() => selectField(f)}
-                    onMouseEnter={() => setPickerHl(globalIdx)}
-                    className={`px-3 py-0.5 text-xs cursor-default select-none ${globalIdx === pickerHl ? 'bg-[#316AC5] text-white' : 'hover:bg-[#D4D0C8]'}`}
-                  >
-                    {f.label}
+          {(() => {
+            const pickerFiltered = textVal
+              ? ALL_CATALOG_FIELDS.filter(f => f.label.toLowerCase().includes(textVal.toLowerCase()) || f.key.toLowerCase().includes(textVal.toLowerCase()))
+              : ALL_CATALOG_FIELDS
+            const filteredSet = new Set(pickerFiltered.map(f => f.key))
+            let flatIdx = 0
+            return FIELD_CATALOG.map(group => {
+              const groupFiltered = group.fields.filter(f => filteredSet.has(f.key))
+              if (groupFiltered.length === 0) return null
+              return (
+                <div key={group.group}>
+                  <div className="text-[10px] font-bold text-[#505050] bg-[#D4D0C8] px-2 py-px uppercase tracking-wide select-none">
+                    {group.group}
                   </div>
-                )
-              })}
-            </div>
-          ))}
+                  {groupFiltered.map(f => {
+                    const idx = flatIdx++
+                    return (
+                      <div
+                        key={f.key}
+                        onMouseDown={() => selectField(f)}
+                        onMouseEnter={() => setPickerHl(idx)}
+                        className={`px-3 py-0.5 text-xs cursor-default select-none ${idx === pickerHl ? 'bg-[#316AC5] text-white' : 'hover:bg-[#D4D0C8]'}`}
+                      >
+                        {f.label}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })
+          })()}
         </div>,
         document.body
       )}
@@ -649,9 +685,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     // Query clause rules
     for (const clause of lastParsedQuery?.clauses ?? []) {
       const field = clause.field ?? 'description'
+      const neg = clause.negated || false
       const inMatch = clause.value.match(/^IN\(([^)]+)\)$/i)
-      if (inMatch) { const v = inMatch[1].trim(); if (v) postRule({ field, operator: 'in', value: v }) }
-      else { const v = clause.value.replace(/\*/g, '').trim(); if (v) postRule({ field, operator: 'contains', value: v }) }
+      if (inMatch) { const v = inMatch[1].trim(); if (v) postRule({ field, operator: 'in', value: v, negated: neg }) }
+      else { const v = clause.value.replace(/\*/g, '').trim(); if (v) postRule({ field, operator: 'contains', value: v, negated: neg }) }
     }
     // advFilter rules
     for (const item of advFilter.dfItems)
@@ -726,9 +763,11 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       setQueryState(qs)
       searchQuery = serializeQueryCompact(qs.tokens)
       setSearchValue(searchQuery)
+      setInputValue(searchQuery)
     } else {
       setQueryState(null)
       setSearchValue('')
+      setInputValue('')
     }
 
     // Restore advFilter state from filter rules
@@ -831,8 +870,20 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
         : null
 
       if (qs && qs.tokens.filter(t => t.type === 'clause').length > 0) {
-        // Has query rules → use evaluateQueryState for boolean logic
-        finalResults = await evaluateQueryState(qs, (field, value) => fetchClause(field, value))
+        // Has query rules → check if all negated (need universe-then-subtract)
+        const clauseTokens = qs.tokens.filter((t): t is ClauseToken => t.type === 'clause')
+        const allNegated = clauseTokens.every(c => c.negated)
+
+        if (allNegated) {
+          finalResults = await fetchClause(null, '*')
+          for (const c of clauseTokens) {
+            const negResults = await fetchClause(c.field, c.value)
+            const negKeys = new Set(negResults.map(r => `${r.groupId}|${r.region}|${r.environment}`))
+            finalResults = finalResults.filter(r => !negKeys.has(`${r.groupId}|${r.region}|${r.environment}`))
+          }
+        } else {
+          finalResults = await evaluateQueryState(qs, (field, value) => fetchClause(field, value))
+        }
       } else {
         // Only filter rules (no query) → broad search with advFilter params
         finalResults = await fetchClause(null, '*')
@@ -1182,14 +1233,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     isResizing.current = { dir, startX: e.clientX, startY: e.clientY, startRect: rect }
   }
 
-  // Escape key to close
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose()
-    }
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [onClose])
+  // Escape key — disabled to prevent accidental window close
 
   // Close filter panel on outside click
   useEffect(() => {
@@ -1285,6 +1329,23 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
         else if (scope.type === 'region') p.set('region', scope.region)
         else if (scope.type === 'env') p.set('environment', scope.env)
         if (clause.field) p.set('field', clause.field)
+        // Include advFilter params so filters apply to each clause fetch
+        const tcInc = advFilter.tcItems.filter(i => i.op === 'include').flatMap(i => [i.id, ...tcDescendants(i.id)])
+        const tcExc = advFilter.tcItems.filter(i => i.op === 'exclude').flatMap(i => [i.id, ...tcDescendants(i.id)])
+        if (tcInc.length) p.set('advTC', [...new Set(tcInc)].join(','))
+        if (tcExc.length) p.set('advTCExclude', [...new Set(tcExc)].join(','))
+        const dfInc = advFilter.dfItems.filter(i => i.op === 'include').flatMap(i => i.values)
+        const dfExc = advFilter.dfItems.filter(i => i.op === 'exclude').flatMap(i => i.values)
+        if (dfInc.length) p.set('advDFInclude', dfInc.join(','))
+        if (dfExc.length) p.set('advDFExclude', dfExc.join(','))
+        const rtInc = advFilter.rtItems.filter(i => i.op === 'include').flatMap(i => i.values)
+        const rtExc = advFilter.rtItems.filter(i => i.op === 'exclude').flatMap(i => i.values)
+        if (rtInc.length) p.set('advRtInclude', rtInc.join(','))
+        if (rtExc.length) p.set('advRtExclude', rtExc.join(','))
+        const dcInc = advFilter.dcItems.filter(i => i.op === 'include').flatMap(i => i.values)
+        const dcExc = advFilter.dcItems.filter(i => i.op === 'exclude').flatMap(i => i.values)
+        if (dcInc.length) p.set('advDCInclude', dcInc.join(','))
+        if (dcExc.length) p.set('advDCExclude', dcExc.join(','))
         const res = await fetch(`/api/formulary/search?${p}`)
         const reader = res.body!.getReader()
         const decoder = new TextDecoder()
@@ -1311,9 +1372,26 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       if (qs.tokens.filter(t => t.type === 'clause').length > 1 ||
           qs.tokens.some(t => t.type === 'op' && (t as OpToken).op === 'AND') ||
           qs.tokens.some(t => t.type === 'clause' && (t as ClauseToken).negated)) {
-        const finalResults = await evaluateQueryState(qs, (field, value) =>
-          fetchClause({ field, value })
-        )
+
+        const clauseTokens = qs.tokens.filter((t): t is ClauseToken => t.type === 'clause')
+        const allNegated = clauseTokens.every(c => c.negated)
+
+        let finalResults: SearchResult[]
+        if (allNegated) {
+          // All clauses are negated — fetch universe (all results matching advFilters), then subtract
+          const universe = await fetchClause({ field: null, value: '*' })
+          finalResults = universe
+          for (const c of clauseTokens) {
+            const negResults = await fetchClause({ field: c.field, value: c.value })
+            const negKeys = new Set(negResults.map(r => `${r.groupId}|${r.region}|${r.environment}`))
+            finalResults = finalResults.filter(r => !negKeys.has(`${r.groupId}|${r.region}|${r.environment}`))
+          }
+        } else {
+          finalResults = await evaluateQueryState(qs, (field, value) =>
+            fetchClause({ field, value })
+          )
+        }
+
         setResults(finalResults)
         setTotal(finalResults.length)
         setQueryMs(Math.round(performance.now() - t0))

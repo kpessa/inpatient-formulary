@@ -211,7 +211,7 @@ export async function searchFormulary({
     const inMatch = q.match(/^IN\(([^)]+)\)$/i)
     const scopedCol = field ? FIELD_DB_COL[field] : null
     if (inMatch && scopedCol) {
-      // IN query: exact case-insensitive match against comma-separated values
+      // IN query: comma-separated values, case-insensitive
       const inVals = inMatch[1].split(',').map(v => v.trim()).filter(Boolean)
       conditions.push(`LOWER(${scopedCol}) IN (${inVals.map(() => '?').join(',')})`)
       sqlArgs.push(...inVals.map(v => v.toLowerCase()))
@@ -219,15 +219,15 @@ export async function searchFormulary({
       const isWildcard = q.includes('*')
       const likeQ = isWildcard ? q.replace(/\*/g, '%') : `${q}%`
       if (scopedCol) {
-        // Single-field scoped search
-        conditions.push(`${scopedCol} LIKE ?`)
+        // Single-field scoped search (case-insensitive)
+        conditions.push(`LOWER(${scopedCol}) LIKE ?`)
         sqlArgs.push(likeQ)
       } else {
-        // All-field search (default)
+        // All-field search (default, case-insensitive)
         conditions.push(
-          '(description LIKE ? OR generic_name LIKE ? OR mnemonic LIKE ? OR ' +
-          'charge_number LIKE ? OR brand_name LIKE ? OR brand_name2 LIKE ? OR ' +
-          'brand_name3 LIKE ? OR pyxis_id LIKE ?)'
+          '(LOWER(description) LIKE ? OR LOWER(generic_name) LIKE ? OR LOWER(mnemonic) LIKE ? OR ' +
+          'LOWER(charge_number) LIKE ? OR LOWER(brand_name) LIKE ? OR LOWER(brand_name2) LIKE ? OR ' +
+          'LOWER(brand_name3) LIKE ? OR LOWER(pyxis_id) LIKE ?)'
         )
         for (let i = 0; i < 8; i++) sqlArgs.push(likeQ)
       }

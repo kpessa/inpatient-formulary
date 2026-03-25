@@ -9,11 +9,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       field: CategoryRule['field']
       operator: CategoryRule['operator']
       value: string
+      negated?: boolean
     }
     if (!body.field || !body.operator || !body.value) {
       return NextResponse.json({ error: 'field, operator, and value are required' }, { status: 400 })
     }
-    const rule = await addRule(id, body.field, body.operator, body.value)
+    const rule = await addRule(id, body.field, body.operator, body.value, body.negated)
     return NextResponse.json({ rule }, { status: 201 })
   } catch (err) {
     console.error('POST /api/categories/[id]/rules', err)

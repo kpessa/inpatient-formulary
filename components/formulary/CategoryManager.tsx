@@ -392,7 +392,7 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
 
       // 3. Re-add query-builder rules
       for (const rule of rules) {
-        postRule({ field: rule.field, operator: rule.operator, value: rule.value })
+        postRule({ field: rule.field, operator: rule.operator, value: rule.value, negated: rule.negated })
       }
 
       await Promise.all(posts)
@@ -1094,6 +1094,14 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
                           state={rulesToQueryState(rules, RULE_FIELD_LABELS)}
                           mode={queryMode}
                           onTokensChange={handleRuleTokensChange}
+                          onEditClause={(clause) => {
+                            const rule = rules.find(r => r.id === clause.id)
+                            if (rule) {
+                              setNewRuleField(rule.field)
+                              setNewRuleOperator(rule.operator)
+                              setNewRuleValue(rule.value)
+                            }
+                          }}
                         />
                       </div>
                     )}
