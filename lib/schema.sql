@@ -166,3 +166,25 @@ CREATE INDEX IF NOT EXISTS idx_mn_ndc ON multum_ndcs(ndc_formatted);
 -- UPDATE formulary_groups SET therapeutic_class = COALESCE(json_extract(clinical_json, '$.therapeuticClass'), '') WHERE therapeutic_class = '';
 -- CREATE INDEX IF NOT EXISTS idx_fg_therapeutic_class ON formulary_groups(therapeutic_class);
 -- (scripts/migrate_therapeutic_class.ts)
+
+-- Design Patterns / Linter
+CREATE TABLE IF NOT EXISTS design_patterns (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  color       TEXT NOT NULL DEFAULT '#F97316',
+  scope_type  TEXT NOT NULL DEFAULT 'all',   -- 'all' | 'category' | 'rule'
+  scope_value TEXT NOT NULL DEFAULT '',      -- category_id OR JSON {"field","operator","value"}
+  created_at  TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS pattern_field_rules (
+  id               TEXT PRIMARY KEY,
+  pattern_id       TEXT NOT NULL REFERENCES design_patterns(id) ON DELETE CASCADE,
+  field            TEXT NOT NULL,
+  operator         TEXT NOT NULL,
+  -- equals|contains|starts_with|ends_with|matches_regex|not_empty|not_equals|not_contains
+  value            TEXT NOT NULL DEFAULT '',
+  expected_display TEXT NOT NULL DEFAULT '',
+  created_at       TEXT DEFAULT (datetime('now'))
+);

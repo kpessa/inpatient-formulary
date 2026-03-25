@@ -344,6 +344,46 @@ export interface SearchFilterGroup {
 }
 
 // ---------------------------------------------------------------------------
+// Design Patterns / Linter
+// ---------------------------------------------------------------------------
+
+export type PatternOperator =
+  | 'equals' | 'not_equals'
+  | 'contains' | 'not_contains'
+  | 'starts_with' | 'ends_with'
+  | 'matches_regex' | 'not_empty'
+
+export interface PatternFieldRule {
+  id: string
+  patternId: string
+  field: string
+  operator: PatternOperator
+  value: string
+  expectedDisplay: string
+}
+
+export interface DesignPattern {
+  id: string
+  name: string
+  description: string
+  color: string
+  scopeType: 'all' | 'category' | 'rule'
+  scopeValue: string
+  fieldRules: PatternFieldRule[]
+}
+
+export interface LinterViolation {
+  patternId: string
+  patternName: string
+  patternColor: string
+  expected: string
+  suggestion?: string   // concrete computed expected value, if derivable from item data
+}
+
+// field name → violations list
+export type LintResultMap = Map<string, LinterViolation[]>
+
+// ---------------------------------------------------------------------------
 // Top-level FormularyItem — one per GROUP_ID
 // ---------------------------------------------------------------------------
 export interface FormularyItem {

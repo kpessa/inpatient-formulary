@@ -6,7 +6,7 @@ import {
   DropdownMenuItem, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 
-export type WindowId = 'formulary' | 'search' | 'categories'
+export type WindowId = 'formulary' | 'search' | 'categories' | 'patterns'
 
 interface WindowEntry {
   id: WindowId
@@ -27,6 +27,7 @@ const WINDOW_DEFS: WindowEntry[] = [
   { id: 'formulary',   label: 'Formulary Manager',  icon: '💊' },
   { id: 'search',      label: 'Product Search',      icon: '🔍' },
   { id: 'categories',  label: 'Category Manager',    icon: '🏷' },
+  { id: 'patterns',    label: 'Pattern Manager',     icon: '◈' },
 ]
 
 const MENU_ITEM_CLASS = 'rounded-none px-3 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white flex items-center gap-2 text-[11px] font-mono'
@@ -68,6 +69,9 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPa
           </DropdownMenuItem>
           <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('categories')}>
             <span>🏷</span> Category Manager
+          </DropdownMenuItem>
+          <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('patterns')}>
+            <span>◈</span> Pattern Manager
           </DropdownMenuItem>
           <DropdownMenuSeparator className="bg-[#808080] my-0" />
           <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('tasks')}>

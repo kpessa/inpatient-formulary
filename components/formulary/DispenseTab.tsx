@@ -12,20 +12,24 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { FormField } from "./FormField"
-import type { FormularyItem } from "@/lib/types"
+import type { FormularyItem, LintResultMap } from "@/lib/types"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import { FieldLintTooltip } from "./FieldLintTooltip"
 import type { FieldValueMap } from "@/lib/formulary-diff"
 
 interface DispenseTabProps {
   item: FormularyItem | null
   highlightedFields?: Set<string>
   fieldValueMap?: FieldValueMap
+  lintViolations?: LintResultMap
 }
 
-export function DispenseTab({ item, highlightedFields, fieldValueMap }: DispenseTabProps) {
+export function DispenseTab({ item, highlightedFields, fieldValueMap, lintViolations }: DispenseTabProps) {
   const d = item?.dispense
   const totalVolCalcValue = d?.usedInTotalVolumeCalculation ? "always" : "never"
   const hl = (key: string): React.CSSProperties => highlightedFields?.has(key) ? { background: '#FFF3CD', borderRadius: '2px' } : {}
+  const lv = (key: string): React.CSSProperties => lintViolations?.has(key) ? { background: '#FFF0E0', outline: '1px solid #F97316', borderRadius: '2px' } : {}
+  const hlv = (key: string): React.CSSProperties => ({ ...hl(key), ...lv(key) })
 
   return (
     <div className="p-3 text-xs font-mono w-fit">
@@ -37,7 +41,7 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
 
           {/* Strength / Volume */}
           <div className="flex gap-4 items-end">
-            <FieldDiffTooltip values={fieldValueMap?.['strength']} style={hl('strength')}><FormField label="Strength:" required>
+            <FieldDiffTooltip values={fieldValueMap?.['strength']} style={hlv('strength')}><FormField label="Strength:" required>
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.strength != null ? String(d.strength) : ""}
@@ -52,7 +56,7 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
               </div>
             </FormField></FieldDiffTooltip>
             <span className="text-xs font-mono mb-1">/</span>
-            <FieldDiffTooltip values={fieldValueMap?.['volume']} style={hl('volume')}><FormField label="Volume:" required>
+            <FieldDiffTooltip values={fieldValueMap?.['volume']} style={hlv('volume')}><FormField label="Volume:" required>
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.volume != null ? String(d.volume) : ""}
@@ -70,7 +74,7 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
 
           {/* Dispense quantity / Dispense category */}
           <div className="flex gap-3 items-end">
-            <FieldDiffTooltip values={fieldValueMap?.['dispenseQty']} style={hl('dispenseQty')}><FormField label="Dispense quantity:">
+            <FieldDiffTooltip values={fieldValueMap?.['dispenseQty']} style={hlv('dispenseQty')}><FormField label="Dispense quantity:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.dispenseQty != null ? String(d.dispenseQty) : ""}
@@ -84,7 +88,7 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
                 />
               </div>
             </FormField></FieldDiffTooltip>
-            <FieldDiffTooltip values={fieldValueMap?.['dispenseCategory']} style={hl('dispenseCategory')}><FormField label="Dispense category:">
+            <FieldLintTooltip violations={lintViolations?.get('dispenseCategory')}><FieldDiffTooltip values={fieldValueMap?.['dispenseCategory']} style={hlv('dispenseCategory')}><FormField label="Dispense category:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.dispenseCategory ?? ""}
@@ -95,7 +99,7 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
                   ...
                 </button>
               </div>
-            </FormField></FieldDiffTooltip>
+            </FormField></FieldDiffTooltip></FieldLintTooltip>
           </div>
 
           {/* Dispense factor */}
@@ -144,17 +148,17 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
           </fieldset>
 
           {/* Formulary status */}
-          <FieldDiffTooltip values={fieldValueMap?.['formularyStatus']} style={hl('formularyStatus')}><FormField label="Formulary status:" required className="w-full">
+          <FieldLintTooltip violations={lintViolations?.get('formularyStatus')}><FieldDiffTooltip values={fieldValueMap?.['formularyStatus']} style={hlv('formularyStatus')}><FormField label="Formulary status:" required className="w-full">
             <Input
               value={d?.formularyStatus ?? ""}
               readOnly
               className="w-full text-xs font-mono rounded-none border border-[#808080] px-1"
             />
-          </FormField></FieldDiffTooltip>
+          </FormField></FieldDiffTooltip></FieldLintTooltip>
 
           {/* Price schedule / Billing factor */}
           <div className="space-y-2 mt-2">
-            <FieldDiffTooltip values={fieldValueMap?.['priceSchedule']} style={hl('priceSchedule')}><FormField label="Price schedule:">
+            <FieldLintTooltip violations={lintViolations?.get('priceSchedule')}><FieldDiffTooltip values={fieldValueMap?.['priceSchedule']} style={hlv('priceSchedule')}><FormField label="Price schedule:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.priceSchedule ?? ""}
@@ -165,8 +169,8 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
                   Formula...
                 </Button>
               </div>
-            </FormField></FieldDiffTooltip>
-            <FieldDiffTooltip values={fieldValueMap?.['awpFactor']} style={hl('awpFactor')}><FormField label="Billing factor:">
+            </FormField></FieldDiffTooltip></FieldLintTooltip>
+            <FieldLintTooltip violations={lintViolations?.get('awpFactor')}><FieldDiffTooltip values={fieldValueMap?.['awpFactor']} style={hlv('awpFactor')}><FormField label="Billing factor:">
               <div className="flex gap-1 items-center">
                 <Input
                   value={d?.awpFactor != null ? String(d.awpFactor) : ""}
@@ -175,7 +179,7 @@ export function DispenseTab({ item, highlightedFields, fieldValueMap }: Dispense
                 />
                 <Input className="text-xs font-mono rounded-none border border-[#808080] px-1 flex-1 h-6" />
               </div>
-            </FormField></FieldDiffTooltip>
+            </FormField></FieldDiffTooltip></FieldLintTooltip>
           </div>
 
           {/* CMS billing unit */}

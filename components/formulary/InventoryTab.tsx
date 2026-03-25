@@ -3,7 +3,7 @@
 import React from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
-import type { FormularyItem } from "@/lib/types"
+import type { FormularyItem, LintResultMap } from "@/lib/types"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
 import type { FieldValueMap } from "@/lib/formulary-diff"
 
@@ -35,9 +35,10 @@ interface InventoryTabProps {
   item: FormularyItem | null
   highlightedFields?: Set<string>
   fieldValueMap?: FieldValueMap
+  lintViolations?: LintResultMap
 }
 
-export function InventoryTab({ item, highlightedFields, fieldValueMap }: InventoryTabProps) {
+export function InventoryTab({ item, highlightedFields, fieldValueMap, lintViolations }: InventoryTabProps) {
   const inv = item?.inventory
   const facilities = inv
     ? Object.entries(inv.facilities).filter(([, v]) => v).map(([k]) => k)
@@ -45,12 +46,14 @@ export function InventoryTab({ item, highlightedFields, fieldValueMap }: Invento
 
   const dispenseFrom = inv?.dispenseFrom ?? ""
   const hl = (key: string): React.CSSProperties => highlightedFields?.has(key) ? { background: '#FFF3CD', borderRadius: '2px' } : {}
+  const lv = (key: string): React.CSSProperties => lintViolations?.has(key) ? { background: '#FFF0E0', outline: '1px solid #F97316', borderRadius: '2px' } : {}
+  const hlv = (key: string): React.CSSProperties => ({ ...hl(key), ...lv(key) })
 
   return (
     <div className="p-3 text-xs font-mono flex flex-col gap-3 h-full">
       {/* Column headers */}
       <div className="grid grid-cols-[1fr_1fr_1fr_180px] gap-3">
-        <FieldDiffTooltip values={fieldValueMap?.['facilities']} style={hl('facilities')}>
+        <FieldDiffTooltip values={fieldValueMap?.['facilities']} style={hlv('facilities')}>
           <div className="text-xs font-mono pr-2">
             <span className="text-[#CC0000]">*</span> Orderable in the following<br />facilities:
           </div>
@@ -67,7 +70,7 @@ export function InventoryTab({ item, highlightedFields, fieldValueMap }: Invento
       {/* Four-column layout with lists and buttons */}
       <div className="grid grid-cols-[1fr_1fr_1fr_180px] gap-3 flex-1 min-h-0 mt-1">
         {/* Column 1: Facilities */}
-        <FieldDiffTooltip values={fieldValueMap?.['facilities']} style={hl('facilities')} className="flex flex-col gap-2 min-h-0">
+        <FieldDiffTooltip values={fieldValueMap?.['facilities']} style={hlv('facilities')} className="flex flex-col gap-2 min-h-0">
           <div className="border border-[#808080] bg-white overflow-y-auto flex-1">
             {facilities.map((f) => (
               <div
@@ -131,7 +134,7 @@ export function InventoryTab({ item, highlightedFields, fieldValueMap }: Invento
 
         {/* Column 4: Dispense from + checkboxes */}
         <div className="flex flex-col gap-2 min-h-0">
-          <FieldDiffTooltip values={fieldValueMap?.['dispenseFrom']} style={hl('dispenseFrom')}>
+          <FieldDiffTooltip values={fieldValueMap?.['dispenseFrom']} style={hlv('dispenseFrom')}>
             <fieldset className="border border-[#808080] rounded-md p-1.5 pt-0.5 text-xs font-mono">
               <legend className="text-xs font-mono px-1 ml-1 text-black font-semibold">Dispense from</legend>
               <div className="space-y-1 mt-1">
@@ -169,7 +172,7 @@ export function InventoryTab({ item, highlightedFields, fieldValueMap }: Invento
             </fieldset>
           </FieldDiffTooltip>
           <div className="space-y-1 overflow-y-auto pr-1">
-            <FieldDiffTooltip values={fieldValueMap?.['isReusable']} style={hl('isReusable')}>
+            <FieldDiffTooltip values={fieldValueMap?.['isReusable']} style={hlv('isReusable')}>
               <div className="flex items-start gap-1">
                 <Checkbox
                   checked={inv?.isReusable ?? false}

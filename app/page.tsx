@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { Input } from "@/components/ui/input"
 import { OEDefaultsTab } from "@/components/formulary/OEDefaultsTab"
 import { DispenseTab } from "@/components/formulary/DispenseTab"
@@ -19,6 +19,7 @@ import { TaskCreateDialog } from "@/components/formulary/TaskCreateDialog"
 import { BuildChecklist } from "@/components/formulary/BuildChecklist"
 import { NonReferenceDialog } from "@/components/formulary/NonReferenceDialog"
 import { CategoryManager } from "@/components/formulary/CategoryManager"
+import { PatternManager } from "@/components/formulary/PatternManager"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,7 +27,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import type { FormularyItem } from "@/lib/types"
+import type { FormularyItem, DesignPattern } from "@/lib/types"
+import { computeLintViolations } from "@/lib/linter"
 import {
   getDomainColor,
   getDomainBadge,
@@ -96,6 +98,7 @@ export default function PharmNetFormulary() {
   const [isBuildOpen, setIsBuildOpen] = useState(false)
   const [isNonReferenceOpen, setIsNonReferenceOpen] = useState(false)
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false)
+  const [isPatternManagerOpen, setIsPatternManagerOpen] = useState(false)
 
   // Window manager
   const [focusedWindow, setFocusedWindow] = useState<WindowId>('formulary')
@@ -117,6 +120,7 @@ export default function PharmNetFormulary() {
   const [scope, setScope] = useState<Scope>({ type: 'all' })
   const [availableDomains, setAvailableDomains] = useState<{ region: string; env: string; domain: string }[]>([])
   const [searchTrigger, setSearchTrigger] = useState<{ value: string; seq: number } | null>(null)
+  const [violationFilterTrigger, setViolationFilterTrigger] = useState<{ patternId: string; seq: number } | null>(null)
 
   // Task system state
   const [showRawExtract, setShowRawExtract] = useState(false)
@@ -124,6 +128,19 @@ export default function PharmNetFormulary() {
   const [pendingTaskCount, setPendingTaskCount] = useState(0)
   const [taskCreateContext, setTaskCreateContext] = useState<TaskCreateContext | null>(null)
   const currentFetchParamsRef = useRef<{ groupId: string; pyxisId?: string; chargeNumber?: string } | null>(null)
+
+  // Design pattern linter
+  const [patterns, setPatterns] = useState<DesignPattern[]>([])
+  const [currentCategoryIds, setCurrentCategoryIds] = useState<string[]>([])
+
+  const fetchPatterns = () => {
+    fetch('/api/design-patterns')
+      .then(r => r.json())
+      .then((d: { patterns: DesignPattern[] }) => setPatterns(d.patterns ?? []))
+      .catch(() => {})
+  }
+
+  useEffect(() => { fetchPatterns() }, [])
 
   useEffect(() => {
     const updateTime = () => {
@@ -221,6 +238,21 @@ export default function PharmNetFormulary() {
   const domainRecords: DomainRecord[] = buildDomainRecords(prodDomains, domainItemsList)
   const headerDiffs = computeHeaderDiffs(domainItemsList)
   const isAnyDomainLoading = Object.values(domainLoading).some(Boolean)
+
+  // Fetch category memberships for selected drug (for category-scoped linting)
+  useEffect(() => {
+    const gid = selectedItem?.groupId
+    if (!gid) { setCurrentCategoryIds([]); return }
+    fetch(`/api/categories/membership?groupIds=${encodeURIComponent(gid)}`)
+      .then(r => r.json())
+      .then((d: Record<string, string[]>) => setCurrentCategoryIds(d[gid] ?? []))
+      .catch(() => setCurrentCategoryIds([]))
+  }, [selectedItem?.groupId])
+
+  const lintViolations = useMemo(
+    () => computeLintViolations(selectedItem, patterns, currentCategoryIds),
+    [selectedItem, patterns, currentCategoryIds],
+  )
   // Inventory diffs are expected across regions — exclude from the summary count
   const totalDiffs = headerDiffs.size + TABS
     .filter(t => t.id !== 'inventory')
@@ -309,6 +341,15 @@ export default function PharmNetFormulary() {
         return next
       })
       setSearchTrigger(prev => ({ value: trimmed, seq: (prev?.seq ?? 0) + 1 }))
+    }
+  }
+
+  const handleFindViolations = (patternId: string, query: string) => {
+    setViolationFilterTrigger(prev => ({ patternId, seq: (prev?.seq ?? 0) + 1 }))
+    setIsSearchModalOpen(true)
+    focusWindow('search')
+    if (query.trim()) {
+      setSearchTrigger(prev => ({ value: query.trim(), seq: (prev?.seq ?? 0) + 1 }))
     }
   }
 
@@ -401,6 +442,19 @@ export default function PharmNetFormulary() {
           title="Category Manager"
         >
           🏷 Categories
+        </button>
+        {/* Pattern Manager button */}
+        <button
+          onClick={() => { setIsPatternManagerOpen(true); focusWindow('patterns') }}
+          className="text-[10px] font-mono px-1.5 h-5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] flex items-center gap-0.5"
+          title="Design Pattern Manager"
+        >
+          ◈ Patterns
+          {lintViolations.size > 0 && (
+            <span className="ml-1 px-1 bg-[#F97316] text-white text-[9px] font-bold rounded-full">
+              {lintViolations.size}
+            </span>
+          )}
         </button>
 
         {/* Search area */}
@@ -568,12 +622,12 @@ export default function PharmNetFormulary() {
 
       {/* Tab content area */}
       <div className="bg-[#D4D0C8] flex-1 flex flex-col border border-[#808080] mx-3 mb-2 overflow-hidden min-h-0">
-        {activeTab === "oe-defaults" && <OEDefaultsTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'oe-defaults').fields} fieldValueMap={fieldValueMap} />}
-        {activeTab === "dispense" && <DispenseTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'dispense').fields} fieldValueMap={fieldValueMap} />}
-        {activeTab === "inventory" && <InventoryTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'inventory').fields} fieldValueMap={fieldValueMap} />}
-        {activeTab === "clinical" && <ClinicalTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'clinical').fields} fieldValueMap={fieldValueMap} />}
+        {activeTab === "oe-defaults" && <OEDefaultsTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'oe-defaults').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
+        {activeTab === "dispense" && <DispenseTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'dispense').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
+        {activeTab === "inventory" && <InventoryTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'inventory').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
+        {activeTab === "clinical" && <ClinicalTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'clinical').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
         {activeTab === "supply" && <SupplyTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'supply').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={currentDrugKey ? handleCreateTask : undefined} />}
-        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'identifiers').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={currentDrugKey ? handleCreateTask : undefined} />}
+        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'identifiers').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={currentDrugKey ? handleCreateTask : undefined} lintViolations={lintViolations} />}
         {activeTab === "tpn-details" && (
           <div className="p-4 text-xs font-mono text-[#808080]">TPN Details tab content</div>
         )}
@@ -633,6 +687,7 @@ export default function PharmNetFormulary() {
         onFocus={() => focusWindow('search')}
         onMinimize={() => minimizeWindow('search')}
         searchTrigger={searchTrigger}
+        violationFilterTrigger={violationFilterTrigger}
         scope={scope}
         availableDomains={availableDomains}
         onClose={() => { setIsSearchModalOpen(false); if (focusedWindow === 'search') setFocusedWindow('formulary') }}
@@ -715,12 +770,25 @@ export default function PharmNetFormulary() {
         onClose={() => { setIsCategoryManagerOpen(false); if (focusedWindow === 'categories') setFocusedWindow('formulary') }}
       />
 
+      {/* Pattern Manager */}
+      <PatternManager
+        open={isPatternManagerOpen}
+        minimized={minimizedWindows.has('patterns')}
+        focused={focusedWindow === 'patterns' && !minimizedWindows.has('patterns')}
+        onFocus={() => focusWindow('patterns')}
+        onMinimize={() => minimizeWindow('patterns')}
+        onClose={() => { setIsPatternManagerOpen(false); if (focusedWindow === 'patterns') setFocusedWindow('formulary') }}
+        onPatternsChanged={fetchPatterns}
+        onFindViolations={handleFindViolations}
+      />
+
     {/* Windows 95 Taskbar */}
     <TaskBar
       openWindows={new Set<WindowId>([
         'formulary',
         ...(isSearchModalOpen ? ['search' as WindowId] : []),
         ...(isCategoryManagerOpen ? ['categories' as WindowId] : []),
+        ...(isPatternManagerOpen ? ['patterns' as WindowId] : []),
       ])}
       minimizedWindows={minimizedWindows}
       focusedWindow={focusedWindow}
@@ -729,11 +797,13 @@ export default function PharmNetFormulary() {
         if (id === 'formulary') focusWindow('formulary')
         else if (id === 'search' && isSearchModalOpen) focusWindow('search')
         else if (id === 'categories' && isCategoryManagerOpen) focusWindow('categories')
+        else if (id === 'patterns' && isPatternManagerOpen) focusWindow('patterns')
       }}
       onStartMenuAction={(id) => {
         if (id === 'formulary') focusWindow('formulary')
         else if (id === 'search') { setIsSearchModalOpen(true); focusWindow('search') }
         else if (id === 'categories') { setIsCategoryManagerOpen(true); focusWindow('categories') }
+        else if (id === 'patterns') { setIsPatternManagerOpen(true); focusWindow('patterns') }
         else if (id === 'tasks') setIsTaskPanelOpen(v => !v)
       }}
     />

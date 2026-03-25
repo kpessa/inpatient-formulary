@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react"
+import { createPortal } from "react-dom"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -18,9 +19,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import type { FormularyItem, DrugCategory, SearchFilterGroup } from "@/lib/types"
+import type { FormularyItem, DrugCategory, SearchFilterGroup, DesignPattern, LinterViolation } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
 import type { DomainValue } from "@/lib/formulary-diff"
+import { computeLintViolations } from "@/lib/linter"
 import { RecentSearchDropdown } from "./RecentSearchDropdown"
 import { TherapeuticClassPicker } from "./TherapeuticClassPicker"
 import { tcDescendants, tcLabel } from "@/lib/therapeutic-class-map"
@@ -28,6 +30,37 @@ import { FieldFilterSelect, FilterChips, type AdvFilterItem } from "./FieldFilte
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
 
 type UnifiedResult = SearchResult & { _allDomains: string[] }
+
+// Map col.id to linter field names
+const COL_TO_LINT_FIELD: Record<string, string> = {
+  description: 'description',
+  generic:     'genericName',
+  mnemonic:    'mnemonic',
+  strength:    'strength',
+  charge:      'chargeNumber',
+  brand:       'brandName',
+  pyxis:       'pyxisId',
+}
+
+function searchResultToPartialItem(r: SearchResult): FormularyItem {
+  return {
+    groupId: r.groupId,
+    description: r.description ?? '',
+    genericName: r.genericName ?? '',
+    mnemonic: r.mnemonic ?? '',
+    strength: r.strength ?? '',
+    strengthUnit: r.strengthUnit ?? '',
+    dosageForm: r.dosageForm ?? '',
+    status: r.status ?? 'Active',
+    legalStatus: '',
+    identifiers: { brandName: r.brandName ?? '', chargeNumber: r.chargeNumber ?? '', pyxisId: r.pyxisId ?? '', labelDescription: '', isBrandPrimary: false, brandName2: '', isBrand2Primary: false, brandName3: '', isBrand3Primary: false, genericName: r.genericName ?? '', hcpcsCode: '', mnemonic: r.mnemonic ?? '', groupRxMnemonic: '' },
+    dispense: { formularyStatus: r.formularyStatus ?? '', dispenseCategory: '', packageUnit: '', awpFactor: null, priceSchedule: '', strength: null, strengthUnit: '', volume: null, volumeUnit: '', usedInTotalVolumeCalculation: false, dispenseQty: null, dispenseQtyUnit: '', isDivisible: false, isInfinitelyDivisible: false, minimumDoseQty: null, packageSize: null, outerPackageSize: null, outerPackageUnit: '', basePackageUnit: '', packageDispenseQty: null, packageDispenseOnlyQtyNeeded: false, defaultParDoses: null, maxParQty: null },
+    oeDefaults: { stopType: '', dose: '', route: '', frequency: '', notes1: '', notes2: '', prnReason: '', referenceDose: '', infuseOver: '', infuseOverUnit: '', rate: '', rateUnit: '', normalizedRate: '', normalizedRateUnit: '', freetextRate: '', isPrn: false, duration: null, durationUnit: '', orderedAsSynonym: '', defaultFormat: '', searchMedication: r.searchMedication, searchContinuous: r.searchContinuous, searchIntermittent: r.searchIntermittent, notes1AppliesToFill: false, notes1AppliesToLabel: false, notes1AppliesToMar: false, notes2AppliesToFill: false, notes2AppliesToLabel: false, notes2AppliesToMar: false },
+    clinical: { genericFormulationCode: '', drugFormulationCode: '', suppressMultumAlerts: false, therapeuticClass: '', dcInteractionDays: null, dcDisplayDays: null, orderAlert1: '' },
+    inventory: { allFacilities: false, facilities: {}, dispenseFrom: '', isReusable: false, inventoryFactor: null, inventoryBasePackageUnit: '' },
+    supplyRecords: [],
+  }
+}
 
 type CategoryInfo = { id: string; name: string; color: string }
 
@@ -53,6 +86,7 @@ interface SearchModalProps {
   focused?: boolean
   hidden?: boolean
   searchTrigger?: { value: string; seq: number } | null
+  violationFilterTrigger?: { patternId: string; seq: number } | null
   scope: Scope
   availableDomains: { region: string; env: string; domain: string }[]
   onSelect: (item: FormularyItem) => void
@@ -134,6 +168,21 @@ function getFieldValue(r: UnifiedResult, colId: string): string {
   }
 }
 
+// Char-level diff helper (prefix/suffix match, mark middle as changed)
+function charDiff(base: string, cmp: string): Array<{ text: string; diff: boolean }> {
+  if (base === cmp) return [{ text: cmp, diff: false }]
+  let p = 0
+  while (p < base.length && p < cmp.length && base[p] === cmp[p]) p++
+  let s = 0
+  while (s < base.length - p && s < cmp.length - p && base[base.length - 1 - s] === cmp[cmp.length - 1 - s]) s++
+  const result: Array<{ text: string; diff: boolean }> = []
+  if (p > 0) result.push({ text: cmp.slice(0, p), diff: false })
+  const mid = s > 0 ? cmp.slice(p, -s) : cmp.slice(p)
+  if (mid) result.push({ text: mid, diff: true })
+  if (s > 0) result.push({ text: cmp.slice(-s), diff: false })
+  return result
+}
+
 const DEFAULT_COLUMNS = [
   { name: "Product Type", checked: false },
   { name: "Order Type", checked: true },
@@ -182,7 +231,7 @@ function classifyActiveFields(q: string, activeFields: Set<string>): Set<string>
   return new Set(candidates.filter(f => activeFields.has(f)))
 }
 
-export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask }: SearchModalProps) {
+export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState("")
   const [scope, setScope] = useState<Scope>(initialScope)
@@ -389,6 +438,24 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const [filterPanel, setFilterPanel] = useState<{ colId: string; x: number; y: number } | null>(null)
   const [filterPanelSearch, setFilterPanelSearch] = useState("")
   const filterPanelRef = useRef<HTMLDivElement | null>(null)
+
+  // Design patterns (for lint highlighting)
+  const [lintPatterns, setLintPatterns] = useState<DesignPattern[]>([])
+  useEffect(() => {
+    fetch('/api/design-patterns')
+      .then(r => r.json())
+      .then((d: { patterns: DesignPattern[] }) => setLintPatterns(d.patterns ?? []))
+      .catch(() => {})
+  }, [])
+
+  // Violation filter — null=off, 'any'=any pattern, '<id>'=specific pattern
+  const [violationFilter, setViolationFilter] = useState<string | null>(null)
+  const [violationMenuPos, setViolationMenuPos] = useState<{ x: number; y: number } | null>(null)
+  // Lint hover tooltip
+  const [lintTooltip, setLintTooltip] = useState<{ left: number; bottom: number; violations: LinterViolation[]; domainValues?: DomainValue[] } | null>(null)
+  useEffect(() => {
+    if (violationFilterTrigger?.patternId) setViolationFilter(violationFilterTrigger.patternId)
+  }, [violationFilterTrigger])
 
   // Advanced search panel
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -926,7 +993,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
   const handleOk = async () => {
     if (selectedResultIdx !== null) {
-      const r = sortedResults[selectedResultIdx]
+      const r = displayedResults[selectedResultIdx]
       if (r) await handleOkForGroup(r.groupId)
     } else {
       onClose()
@@ -1084,6 +1151,25 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
         return 0
       })
     : baseResults
+
+  // Violation filter: compute which semantic keys have violations
+  const violatingSemanticKeys = useMemo(() => {
+    if (!violationFilter) return null
+    const keys = new Set<string>()
+    for (const r of filteredResults) {
+      const lintMap = computeLintViolations(searchResultToPartialItem(r), lintPatterns, [])
+      if (lintMap.size === 0) continue
+      if (violationFilter === 'any') { keys.add(getSemanticKey(r)); continue }
+      for (const violations of lintMap.values()) {
+        if (violations.some(v => v.patternId === violationFilter)) { keys.add(getSemanticKey(r)); break }
+      }
+    }
+    return keys
+  }, [violationFilter, filteredResults, lintPatterns])
+
+  const displayedResults = violatingSemanticKeys
+    ? sortedResults.filter(r => violatingSemanticKeys.has(getSemanticKey(r)))
+    : sortedResults
 
   // Filter panel computed values
   const fpFilter = filterPanel
@@ -1306,7 +1392,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   Unified
                 </label>
                 {(() => {
-                  const selectedRow = selectedResultIdx !== null ? sortedResults[selectedResultIdx] : null
+                  const selectedRow = selectedResultIdx !== null ? displayedResults[selectedResultIdx] : null
                   const domainCount = selectedRow ? (variantsByGroup.get(getSemanticKey(selectedRow))?.length ?? 0) : 0
                   return (
                     <>
@@ -1320,6 +1406,34 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     </>
                   )
                 })()}
+                {lintPatterns.length > 0 && (
+                  <button
+                    onClick={e => {
+                      const r = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                      setViolationMenuPos(violationMenuPos ? null : { x: r.left, y: r.bottom + 1 })
+                    }}
+                    className={`h-5 px-2 border text-xs flex items-center gap-1 shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] ${
+                      violationFilter
+                        ? 'bg-[#FFF0E0] border-[#F97316] text-[#C04000] hover:bg-[#FFE0C0]'
+                        : 'border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898]'
+                    }`}
+                    title="Filter results to only show design pattern violations"
+                  >
+                    ◈ Violations
+                    {violationFilter && (
+                      <span className="max-w-[100px] truncate text-[10px]">
+                        : {violationFilter === 'any' ? 'Any' : (lintPatterns.find(p => p.id === violationFilter)?.name ?? '')}
+                      </span>
+                    )}
+                    {violationFilter && (
+                      <span
+                        onClick={e => { e.stopPropagation(); setViolationFilter(null); setViolationMenuPos(null) }}
+                        className="ml-0.5 hover:text-red-600 font-bold leading-none"
+                        title="Clear violation filter"
+                      >×</span>
+                    )}
+                  </button>
+                )}
               </div>
 
               {/* Advanced Filter Panel */}
@@ -1441,7 +1555,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         ? (() => {
                             const catName = allCategories.find(c => c.id === categoryFilter)?.name ?? 'Category'
                             return results.length > 0
-                              ? `Category: ${catName} — ${sortedResults.length} drug${sortedResults.length !== 1 ? 's' : ''}.`
+                              ? `Category: ${catName} — ${displayedResults.length} drug${displayedResults.length !== 1 ? 's' : ''}.`
                               : queryMs !== null ? `Category: ${catName} — no Pyxis IDs or no matches.` : ''
                           })()
                         : total > results.length
@@ -1449,10 +1563,22 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         : results.length > 0
                         ? isUnified && baseResults.length < results.length
                           ? `${baseResults.length} unique (${results.length} total).`
-                          : `${sortedResults.length} result${sortedResults.length !== 1 ? 's' : ''}.`
+                          : `${displayedResults.length} result${displayedResults.length !== 1 ? 's' : ''}.`
                         : queryMs !== null
                         ? 'No results found.'
                         : ''}
+                      {violatingSemanticKeys && displayedResults.length < sortedResults.length && (
+                        <>
+                          <span className="text-[#C04000]">({displayedResults.length} of {sortedResults.length} violating)</span>
+                          <button
+                            onClick={() => setViolationFilter(null)}
+                            className="text-[#C04000] hover:text-red-600 font-bold leading-none"
+                            title="Clear violation filter"
+                          >
+                            ×
+                          </button>
+                        </>
+                      )}
                       {results.length > 0 && filteredResults.length < results.length && (
                         <>
                           <span className="text-[#316AC5]">({filteredResults.length} filtered)</span>
@@ -1590,7 +1716,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         </td>
                       </tr>
                     ) : (
-                      sortedResults.map((r, idx) => {
+                      displayedResults.map((r, idx) => {
                         const isSelected = selectedResultIdx === idx
                         const strengthForm = [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(" ").trim()
                         const realFacs = r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
@@ -1599,6 +1725,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         const parentDiffCols = isUnified
                           ? computeDiffCols((variantsByGroup.get(getSemanticKey(r)) ?? []).filter(isProd))
                           : new Set<string>()
+                        const parentLintViolations = computeLintViolations(searchResultToPartialItem(r), lintPatterns, [])
 
                         // Build DomainValue[] for a specific field from prod variants
                         const buildFieldDomainValues = (colId: string): DomainValue[] => {
@@ -1731,7 +1858,12 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                             </td>
                             {cols.map(col => {
                               const pDiff = !isSelected && parentDiffCols.has(col.id)
-                              const pDiffStyle = pDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
+                              const pLintField = COL_TO_LINT_FIELD[col.id]
+                              const pLintViols = pLintField ? parentLintViolations.get(pLintField) : undefined
+                              const pLint = !isSelected && (pLintViols?.length ?? 0) > 0
+                              const pDiffStyle = pLint
+                                ? { background: '#FFF0E0', borderBottom: '1px solid #F97316' }
+                                : pDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
                               switch (col.id) {
                                 case "domain": {
                                   const variants = variantsByGroup.get(getSemanticKey(r)) ?? []
@@ -1850,12 +1982,28 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                       )}
                                     </td>
                                   )
-                                case "pyxis":       return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('pyxis', r.pyxisId)}</td>
-                                case "mnemonic":    return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('mnemonic', r.mnemonic)}</td>
-                                case "generic":     return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('generic', r.genericName)}</td>
-                                case "strength":    return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('strength', strengthForm)}</td>
-                                case "description": return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('description', r.description)}</td>
-                                case "brand":       return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }}>{cellWithTask('brand', r.brandName)}</td>
+                                {/* eslint-disable-next-line no-case-declarations */}
+                                case "pyxis":
+                                case "mnemonic":
+                                case "generic":
+                                case "strength":
+                                case "description":
+                                case "brand": {
+                                  const pLintH = pLint && pLintViols ? {
+                                    onMouseEnter: (e: React.MouseEvent) => {
+                                      const r2 = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                                      setLintTooltip({ left: r2.left, bottom: window.innerHeight - r2.top, violations: pLintViols, domainValues: pDiff ? buildFieldDomainValues(col.id) : undefined })
+                                    },
+                                    onMouseLeave: () => setLintTooltip(null),
+                                  } : {}
+                                  const content = col.id === 'pyxis' ? cellWithTask('pyxis', r.pyxisId)
+                                    : col.id === 'mnemonic' ? cellWithTask('mnemonic', r.mnemonic)
+                                    : col.id === 'generic' ? cellWithTask('generic', r.genericName)
+                                    : col.id === 'strength' ? cellWithTask('strength', strengthForm)
+                                    : col.id === 'description' ? cellWithTask('description', r.description)
+                                    : cellWithTask('brand', r.brandName)
+                                  return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }} {...pLintH}>{content}</td>
+                                }
                                 default:            return <td key={col.id} />
                               }
                             })}
@@ -1868,6 +2016,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                               const prodVariants = variants.filter(isProd)
                                 .sort((a, b) => regionOrder.indexOf(a.region) - regionOrder.indexOf(b.region))
                               const diffCols = computeDiffCols(prodVariants)
+                              const lintMaps = new Map(prodVariants.map(v => [
+                                v.groupId,
+                                computeLintViolations(searchResultToPartialItem(v), lintPatterns, [])
+                              ]))
 
                               return prodVariants.flatMap(v => {
                                 const dk = getDomainKey(v)
@@ -1896,35 +2048,56 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                     </td>
                                     {cols.map(col => {
                                       const isDiff = diffCols.has(col.id)
-                                      const diffStyle = isDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
+                                      const lintField = COL_TO_LINT_FIELD[col.id]
+                                      const colLintViolations = lintField ? lintMaps.get(v.groupId)?.get(lintField) : undefined
+                                      const isLint = (colLintViolations?.length ?? 0) > 0
+                                      const lintTitle = isLint ? colLintViolations!.map(vv => `${vv.patternName}: ${vv.expected}`).join(' | ') : undefined
+                                      const cellStyle = isLint
+                                        ? { background: '#FFF0E0', borderBottom: '1px solid #F97316' }
+                                        : isDiff
+                                        ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' }
+                                        : {}
+                                      const lintHandlers = isLint && colLintViolations ? {
+                                        onMouseEnter: (e: React.MouseEvent) => {
+                                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                                          const variantDomainValues: DomainValue[] | undefined = isDiff
+                                            ? prodVariants.map(pv => {
+                                                const { bg, text } = getDomainColor(pv.region, pv.environment)
+                                                return { domain: getDomainKey(pv), badge: getDomainBadge(pv.region, pv.environment), bg, text, value: getFieldValue(pv, col.id) }
+                                              })
+                                            : undefined
+                                          setLintTooltip({ left: r.left, bottom: window.innerHeight - r.top, violations: colLintViolations, domainValues: variantDomainValues })
+                                        },
+                                        onMouseLeave: () => setLintTooltip(null),
+                                      } : {}
                                       switch (col.id) {
                                         case 'domain': return (
-                                          <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>
+                                          <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }}>
                                             <span style={{ background: vbg, color: vtext }}
                                               className="text-[9px] font-bold px-1 rounded-sm">{getDomainBadge(vreg, 'prod')}</span>
                                           </td>
                                         )
-                                        case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.description}</td>
-                                        case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.genericName}</td>
-                                        case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{vStrengthForm}</td>
-                                        case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.mnemonic}</td>
-                                        case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{v.chargeNumber}</td>
-                                        case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.brandName}</td>
-                                        case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{v.pyxisId}</td>
-                                        case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{[v.searchMedication && 'Med', v.searchIntermittent && 'Int', v.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
+                                        case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.description}</td>
+                                        case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.genericName}</td>
+                                        case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{vStrengthForm}</td>
+                                        case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.mnemonic}</td>
+                                        case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.chargeNumber}</td>
+                                        case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.brandName}</td>
+                                        case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.pyxisId}</td>
+                                        case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }}>{[v.searchMedication && 'Med', v.searchIntermittent && 'Int', v.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
                                         case 'facility': {
                                           const vFacs = v.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
-                                          if (vFacs.length === 0) return <td key={col.id} style={{ ...diffStyle, textAlign: col.align }} />
-                                          if (vFacs.length === 1) return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{vFacs[0]}</td>
+                                          if (vFacs.length === 0) return <td key={col.id} style={{ ...cellStyle, textAlign: col.align }} />
+                                          if (vFacs.length === 1) return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>{vFacs[0]}</td>
                                           return (
-                                            <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>
+                                            <td key={col.id} className="px-2 py-0.5 max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>
                                               <div className="flex flex-wrap gap-[2px]">
                                                 {vFacs.map(f => <div key={f} title={f} style={{ background: vbg }} className="w-[5px] h-[5px] rounded-[1px] shrink-0" />)}
                                               </div>
                                             </td>
                                           )
                                         }
-                                        default:            return <td key={col.id} style={{ ...diffStyle, textAlign: col.align }} />
+                                        default:            return <td key={col.id} style={{ ...cellStyle, textAlign: col.align }} />
                                       }
                                     })}
                                   </tr>
@@ -1997,6 +2170,113 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   </tbody>
                 </table>
               </div>
+
+              {/* Lint violation hover tooltip */}
+              {lintTooltip && typeof window !== 'undefined' && createPortal(
+                <div
+                  className="fixed z-[9001] min-w-[220px] w-max bg-white border border-[#808080] shadow-[2px_2px_0px_#000000] pointer-events-none"
+                  style={{ left: lintTooltip.left, bottom: lintTooltip.bottom + 2 }}
+                >
+                  <div className="bg-[#C85A00] text-white text-[9px] font-mono font-bold px-1.5 py-0.5">
+                    Design Pattern Violations
+                  </div>
+                  <div className="p-1 space-y-1">
+                    {lintTooltip.violations.map((vv, i) => (
+                      <div key={i} className="flex items-start gap-1.5">
+                        <span
+                          className="shrink-0 mt-0.5 w-2.5 h-2.5 rounded-full border border-black/20 inline-block"
+                          style={{ background: vv.patternColor }}
+                        />
+                        <span className="text-[10px] font-mono text-black leading-tight">
+                          <span className="font-bold">{vv.patternName}</span>
+                          {vv.suggestion && (
+                            <div className="mt-0.5">
+                              <span className="text-[#808080]">should be: </span>
+                              <span className="font-bold text-[#C04000]">{vv.suggestion}</span>
+                            </div>
+                          )}
+                          <div className="text-[#808080] text-[9px]">{vv.expected}</div>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {lintTooltip.domainValues && lintTooltip.domainValues.length > 0 && (() => {
+                    const base = lintTooltip.domainValues[0].value
+                    return (
+                      <>
+                        <div className="border-t border-[#808080]" />
+                        <div className="bg-[#316AC5] text-white text-[9px] font-mono font-bold px-1.5 py-0.5">
+                          Domain Values
+                        </div>
+                        <div className="p-1 space-y-0.5">
+                          {lintTooltip.domainValues.map((dv, i) => {
+                            const segments = i === 0 ? null : charDiff(base, dv.value)
+                            return (
+                              <div key={dv.domain} className="flex items-start gap-1.5">
+                                <span
+                                  className="text-[9px] font-mono font-bold px-1.5 py-0.5 whitespace-nowrap shrink-0 leading-none mt-0.5 min-w-[18px] text-center inline-block"
+                                  style={{ background: dv.bg, color: dv.text }}
+                                >
+                                  {dv.badge}
+                                </span>
+                                <span className="text-[10px] font-mono text-black leading-tight whitespace-nowrap">
+                                  {dv.value
+                                    ? segments
+                                      ? segments.map((seg, j) =>
+                                          seg.diff
+                                            ? <mark key={j} className="bg-amber-300 text-black not-italic px-0">{seg.text}</mark>
+                                            : <span key={j}>{seg.text}</span>
+                                        )
+                                      : dv.value
+                                    : <span className="text-[#808080] italic">—</span>
+                                  }
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </>
+                    )
+                  })()}
+                </div>,
+                document.body
+              )}
+
+              {/* Violation filter menu */}
+              {violationMenuPos && (
+                <>
+                  <div className="fixed inset-0 z-[9998]" onClick={() => setViolationMenuPos(null)} />
+                  <div
+                    style={{ position: 'fixed', left: violationMenuPos.x, top: violationMenuPos.y, zIndex: 9999 }}
+                    className="bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] text-xs font-mono py-0.5 min-w-[180px]"
+                    onMouseDown={e => e.stopPropagation()}
+                  >
+                    <button
+                      className={`w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap ${!violationFilter ? 'font-bold' : ''}`}
+                      onClick={() => { setViolationFilter(null); setViolationMenuPos(null) }}
+                    >
+                      ○ Off
+                    </button>
+                    <button
+                      className={`w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap ${violationFilter === 'any' ? 'font-bold' : ''}`}
+                      onClick={() => { setViolationFilter('any'); setViolationMenuPos(null) }}
+                    >
+                      ● Any pattern
+                    </button>
+                    {lintPatterns.length > 0 && <div className="border-t border-[#C0C0C0] my-0.5" />}
+                    {lintPatterns.map(p => (
+                      <button
+                        key={p.id}
+                        className={`w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap flex items-center gap-1.5 ${violationFilter === p.id ? 'font-bold' : ''}`}
+                        onClick={() => { setViolationFilter(p.id); setViolationMenuPos(null) }}
+                      >
+                        <span style={{ color: p.color }}>●</span>
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
               {/* Context menu */}
               {ctxMenu && (

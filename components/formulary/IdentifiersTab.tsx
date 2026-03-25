@@ -27,8 +27,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { FormularyItem } from "@/lib/types"
+import type { FormularyItem, LintResultMap } from "@/lib/types"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import { FieldLintTooltip } from "./FieldLintTooltip"
 import type { FieldValueMap, DomainRecord, DomainValue } from "@/lib/formulary-diff"
 
 interface IdentifierRow {
@@ -46,6 +47,7 @@ interface IdentifiersTabProps {
   fieldValueMap?: FieldValueMap
   domainRecords?: DomainRecord[]
   onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void
+  lintViolations?: LintResultMap
 }
 
 function buildRows(item: FormularyItem | null): IdentifierRow[] {
@@ -99,7 +101,7 @@ function getIdentifierValue(item: FormularyItem, fieldKey: string): string {
   }
 }
 
-export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainRecords, onCreateTask }: IdentifiersTabProps) {
+export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainRecords, onCreateTask, lintViolations }: IdentifiersTabProps) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const [showNewDialog, setShowNewDialog] = useState(false)
@@ -148,6 +150,7 @@ export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainR
           <TableBody>
             {rows.map((row, idx) => {
               const isHighlighted = highlightedFields?.has(row.fieldKey)
+              const isLintViolated = lintViolations?.has(row.fieldKey) ?? false
               const isExpanded = expandedRows.has(row.id)
               const isSelected = selectedRow === row.id
               const canExpand = hasDomainData && isHighlighted
@@ -167,12 +170,15 @@ export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainR
                   className={`border-b border-[#D4D0C8] cursor-pointer h-6 ${
                     isSelected
                       ? 'bg-[#316AC5] text-white'
+                      : isLintViolated
+                      ? 'bg-[#FFF0E0] hover:bg-[#FFE0C0]'
                       : isHighlighted
                       ? 'bg-[#FFF3CD] hover:bg-[#FFE99A]'
                       : idx % 2 === 0
                       ? 'bg-white hover:bg-[#C7D5E8]'
                       : 'bg-[#F0F0F0] hover:bg-[#C7D5E8]'
                   }`}
+                  title={isLintViolated ? lintViolations!.get(row.fieldKey)!.map(v => `${v.patternName}: ${v.expected}`).join(' | ') : undefined}
                   onClick={() => setSelectedRow(row.id)}
                 >
                   {hasDomainData && (

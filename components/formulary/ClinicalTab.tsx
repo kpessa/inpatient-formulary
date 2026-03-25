@@ -5,8 +5,9 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import type { FormularyItem } from "@/lib/types"
+import type { FormularyItem, LintResultMap } from "@/lib/types"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import { FieldLintTooltip } from "./FieldLintTooltip"
 import type { FieldValueMap } from "@/lib/formulary-diff"
 import { tcLabel } from "@/lib/therapeutic-class-map"
 
@@ -14,11 +15,14 @@ interface ClinicalTabProps {
   item: FormularyItem | null
   highlightedFields?: Set<string>
   fieldValueMap?: FieldValueMap
+  lintViolations?: LintResultMap
 }
 
-export function ClinicalTab({ item, highlightedFields, fieldValueMap }: ClinicalTabProps) {
+export function ClinicalTab({ item, highlightedFields, fieldValueMap, lintViolations }: ClinicalTabProps) {
   const d = item?.clinical
   const hl = (key: string): React.CSSProperties => highlightedFields?.has(key) ? { background: '#FFF3CD', borderRadius: '2px' } : {}
+  const lv = (key: string): React.CSSProperties => lintViolations?.has(key) ? { background: '#FFF0E0', outline: '1px solid #F97316', borderRadius: '2px' } : {}
+  const hlv = (key: string): React.CSSProperties => ({ ...hl(key), ...lv(key) })
   return (
     <div className="p-3 text-xs font-mono flex flex-col gap-3">
       {/* Left/Right split */}
@@ -26,7 +30,7 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
         {/* Left column */}
         <div className="flex-1 flex flex-col gap-2">
           {/* Generic formulation */}
-          <FieldDiffTooltip values={fieldValueMap?.['genericFormulationCode']} style={hl('genericFormulationCode')}>
+          <FieldDiffTooltip values={fieldValueMap?.['genericFormulationCode']} style={hlv('genericFormulationCode')}>
             <div className="flex flex-col gap-0.5">
               <Label className="text-xs font-mono text-[#808080]">Generic formulation:</Label>
               <div className="flex gap-1">
@@ -44,7 +48,7 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
           </FieldDiffTooltip>
 
           {/* Drug formulation */}
-          <FieldDiffTooltip values={fieldValueMap?.['drugFormulationCode']} style={hl('drugFormulationCode')}>
+          <FieldDiffTooltip values={fieldValueMap?.['drugFormulationCode']} style={hlv('drugFormulationCode')}>
             <div className="flex flex-col gap-0.5">
               <Label className="text-xs font-mono text-[#808080]">Drug formulation (drug, strength, form):</Label>
               <div className="flex gap-1">
@@ -62,7 +66,7 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
           </FieldDiffTooltip>
 
           {/* Suppress alerts */}
-          <FieldDiffTooltip values={fieldValueMap?.['suppressMultumAlerts']} style={hl('suppressMultumAlerts')}>
+          <FieldLintTooltip violations={lintViolations?.get('suppressMultumAlerts')}><FieldDiffTooltip values={fieldValueMap?.['suppressMultumAlerts']} style={hlv('suppressMultumAlerts')}>
             <div className="flex items-center gap-1">
               <Checkbox
                 checked={d?.suppressMultumAlerts ?? false}
@@ -70,10 +74,10 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
               />
               <span className="text-xs font-mono">Suppress clinical checking alerts</span>
             </div>
-          </FieldDiffTooltip>
+          </FieldDiffTooltip></FieldLintTooltip>
 
           {/* Order alerts */}
-          <FieldDiffTooltip values={fieldValueMap?.['orderAlert1']} style={hl('orderAlert1')}>
+          <FieldLintTooltip violations={lintViolations?.get('orderAlert1')}><FieldDiffTooltip values={fieldValueMap?.['orderAlert1']} style={hlv('orderAlert1')}>
             <div className="border border-[#808080] p-1 flex-1 flex flex-col">
               <div className="text-xs font-mono mb-1">Order alerts</div>
               <div className="border border-[#808080] bg-white flex-1 min-h-52 p-1">
@@ -89,13 +93,13 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
                 Update Order Alerts
               </Button>
             </div>
-          </FieldDiffTooltip>
+          </FieldDiffTooltip></FieldLintTooltip>
         </div>
 
         {/* Right column */}
         <div className="flex-1 flex flex-col gap-2">
           {/* Therapeutic class */}
-          <FieldDiffTooltip values={fieldValueMap?.['therapeuticClass']} style={hl('therapeuticClass')}>
+          <FieldLintTooltip violations={lintViolations?.get('therapeuticClass')}><FieldDiffTooltip values={fieldValueMap?.['therapeuticClass']} style={hlv('therapeuticClass')}>
             <div className="flex flex-col gap-0.5">
               <div className="flex items-center justify-between">
                 <Label className="text-xs font-mono">Therapeutic class:</Label>
@@ -110,13 +114,13 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
                 className="h-6 text-xs font-mono rounded-none border-[#808080] px-1 py-0 bg-white"
               />
             </div>
-          </FieldDiffTooltip>
+          </FieldDiffTooltip></FieldLintTooltip>
 
           {/* Order catalog DC information */}
           <div className="border border-[#808080] p-2">
             <div className="text-xs font-mono mb-2">Order catalog DC information</div>
             <div className="flex gap-4">
-              <FieldDiffTooltip values={fieldValueMap?.['dcInteractionDays']} style={hl('dcInteractionDays')}>
+              <FieldDiffTooltip values={fieldValueMap?.['dcInteractionDays']} style={hlv('dcInteractionDays')}>
                 <div className="flex flex-col gap-0.5">
                   <Label className="text-xs font-mono">Interaction:</Label>
                   <Input
@@ -126,7 +130,7 @@ export function ClinicalTab({ item, highlightedFields, fieldValueMap }: Clinical
                   />
                 </div>
               </FieldDiffTooltip>
-              <FieldDiffTooltip values={fieldValueMap?.['dcDisplayDays']} style={hl('dcDisplayDays')}>
+              <FieldDiffTooltip values={fieldValueMap?.['dcDisplayDays']} style={hlv('dcDisplayDays')}>
                 <div className="flex flex-col gap-0.5">
                   <Label className="text-xs font-mono">Display:</Label>
                   <Input
