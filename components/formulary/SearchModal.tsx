@@ -1932,7 +1932,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                       const qName = lastParsedQuery?.clauses.map(c => c.value.replace(/\*/g, '').trim()).filter(Boolean).join(' / ') ?? ''
                       if (categoryFilter) {
                         const cat = allCategories.find(c => c.id === categoryFilter)
-                        setSaveCatDialog({ name: cat?.name ?? qName || 'New Category', color: cat?.color ?? '#6B7280', saving: false, updateCategoryId: categoryFilter })
+                        setSaveCatDialog({ name: (cat?.name ?? qName) || 'New Category', color: cat?.color ?? '#6B7280', saving: false, updateCategoryId: categoryFilter })
                       } else {
                         setSaveCatDialog({ name: qName || 'New Category', color: '#6B7280', saving: false })
                       }
