@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import type { FormularyItem, DrugCategory, CategoryRule, SearchFilterGroup, DesignPattern, LinterViolation } from "@/lib/types"
+import type { FormularyItem, DrugCategory, CategoryRule, CategoryExclusion, SearchFilterGroup, DesignPattern, LinterViolation } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
 import type { DomainValue } from "@/lib/formulary-diff"
 import { computeLintViolations } from "@/lib/linter"
@@ -669,22 +669,58 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       setQueryState(null)
       setSearchValue('')
       setInputValue('')
+      setAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
+      setExcludedKeys(new Set())
       return
     }
-    // Fetch rules + pyxis IDs in parallel
-    const [catData, { pyxisIds }] = await Promise.all([
+    // Fetch rules, pyxis IDs, and exclusions in parallel
+    const [catData, { pyxisIds }, { exclusions }] = await Promise.all([
       fetch(`/api/categories/${catId}`).then(r => r.json()) as Promise<{ category: { id: string; name: string }; rules: CategoryRule[] }>,
       fetch(`/api/categories/${catId}/pyxis-ids`).then(r => r.json()) as Promise<{ pyxisIds: string[] }>,
+      fetch(`/api/categories/${catId}/exclusions`).then(r => r.json()) as Promise<{ exclusions: CategoryExclusion[] }>,
     ])
-    // Populate QueryBuilder with the category's rules
-    if (catData.rules && catData.rules.length > 0) {
-      const qs = rulesToQueryState(catData.rules)
+
+    // Split rules: query fields → QueryBuilder; filter fields → advFilter panel
+    const ADV_FILTER_FIELDS = new Set(['dosageForm', 'route', 'dispenseCategory', 'therapeuticClass'])
+    const queryRules = (catData.rules ?? []).filter(r => !ADV_FILTER_FIELDS.has(r.field as string))
+    const filterRules = (catData.rules ?? []).filter(r => ADV_FILTER_FIELDS.has(r.field as string))
+
+    // Restore QueryBuilder from query rules
+    if (queryRules.length > 0) {
+      const qs = rulesToQueryState(queryRules)
       setQueryState(qs)
       setSearchValue(serializeQueryCompact(qs.tokens))
     } else {
       setQueryState(null)
       setSearchValue('')
     }
+
+    // Restore advFilter state from filter rules
+    const newAdvFilter = { tcItems: [] as AdvFilterItem[], dfItems: [] as AdvFilterItem[], rtItems: [] as AdvFilterItem[], dcItems: [] as AdvFilterItem[] }
+    for (const rule of filterRules) {
+      const field = rule.field as string
+      const values = field === 'therapeuticClass'
+        ? [rule.value]
+        : rule.value.split(',').map(v => v.trim()).filter(Boolean)
+      if (field === 'therapeuticClass') {
+        newAdvFilter.tcItems.push({ id: rule.value, type: 'tc', op: 'include', label: tcLabel(rule.value) || rule.value, icon: '⚕', values })
+      } else {
+        const sfField = field === 'dosageForm' ? 'dosage_form' as const
+          : field === 'route' ? 'route' as const
+          : 'dispense_category' as const
+        const matchedGroup = filterGroups.find(g =>
+          g.field === sfField && values.length === g.values.length && values.every(v => g.values.includes(v))
+        )
+        const item: AdvFilterItem = matchedGroup
+          ? { id: matchedGroup.id, type: 'group', op: 'include', label: matchedGroup.name, icon: matchedGroup.icon, values: matchedGroup.values }
+          : { id: values.join(','), type: 'value', op: 'include', label: values.slice(0, 2).join(', ') + (values.length > 2 ? '…' : ''), icon: '', values }
+        if (field === 'dosageForm') newAdvFilter.dfItems.push(item)
+        else if (field === 'route') newAdvFilter.rtItems.push(item)
+        else newAdvFilter.dcItems.push(item)
+      }
+    }
+    setAdvFilter(newAdvFilter)
+
     setCategorySearchActive(true)
     const gen = ++searchGenRef.current
     setResults([])
@@ -719,6 +755,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       if (searchGenRef.current !== gen) return
       setResults(finalResults)
       setQueryMs(Math.round(performance.now() - t0))
+      // Restore exclusions: match saved groupIds against loaded results
+      if (exclusions && exclusions.length > 0) {
+        const excludedGroupIds = new Set(exclusions.map(e => e.groupId))
+        const restoredKeys = new Set<string>()
+        for (const r of finalResults) {
+          if (excludedGroupIds.has(r.groupId)) restoredKeys.add(getSemanticKey(r))
+        }
+        if (restoredKeys.size > 0) setExcludedKeys(restoredKeys)
+      }
       setTimeout(() => loadDetails(finalResults, gen), 0)
       setTimeout(() => loadCategories(finalResults, gen), 0)
     } catch (err) {
@@ -2785,6 +2830,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         {lastParsedQuery?.clauses.map((c, i) => (
                           <div key={i}>{i + 1}. Rule: {c.field ?? 'all fields'} contains &quot;{c.value.replace(/\*/g, '')}&quot;</div>
                         ))}
+                        {(advFilter.dfItems.length + advFilter.rtItems.length + advFilter.dcItems.length + advFilter.tcItems.length) > 0 && (
+                          <div className="mt-0.5">
+                            {advFilter.dfItems.map((it, i) => <div key={`df${i}`}>+ dosage form filter: {it.label}</div>)}
+                            {advFilter.rtItems.map((it, i) => <div key={`rt${i}`}>+ route filter: {it.label}</div>)}
+                            {advFilter.dcItems.map((it, i) => <div key={`dc${i}`}>+ dispense category filter: {it.label}</div>)}
+                            {advFilter.tcItems.map((it, i) => <div key={`tc${i}`}>+ therapeutic class: {it.label}</div>)}
+                          </div>
+                        )}
                         {excludedKeys.size > 0 && (
                           <div className="mt-0.5 text-[#808080]">{excludedKeys.size} manual exclusion{excludedKeys.size !== 1 ? 's' : ''}</div>
                         )}
@@ -2832,7 +2885,28 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                   })
                                 }
                               }
-                              // 3. Add exclusions
+                              // 3. Save advFilter items as rules
+                              const advRules: Array<{ field: string; operator: string; value: string }> = []
+                              for (const item of advFilter.dfItems)
+                                if (item.op === 'include' && item.values.length > 0)
+                                  advRules.push({ field: 'dosageForm', operator: 'in', value: item.values.join(',') })
+                              for (const item of advFilter.rtItems)
+                                if (item.op === 'include' && item.values.length > 0)
+                                  advRules.push({ field: 'route', operator: 'in', value: item.values.join(',') })
+                              for (const item of advFilter.dcItems)
+                                if (item.op === 'include' && item.values.length > 0)
+                                  advRules.push({ field: 'dispenseCategory', operator: 'in', value: item.values.join(',') })
+                              for (const item of advFilter.tcItems)
+                                if (item.op === 'include')
+                                  advRules.push({ field: 'therapeuticClass', operator: 'equals', value: item.id })
+                              for (const r of advRules) {
+                                await fetch(`/api/categories/${catId}/rules`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(r),
+                                })
+                              }
+                              // 4. Add exclusions
                               for (const semKey of excludedKeys) {
                                 const result = displayedResults.find(r => getSemanticKey(r) === semKey) ??
                                                sortedResults.find(r => getSemanticKey(r) === semKey)

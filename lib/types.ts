@@ -318,7 +318,7 @@ export interface DrugCategory {
 export interface CategoryRule {
   id: string
   categoryId: string
-  field: 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'status' | 'strength'
+  field: 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'route' | 'status' | 'strength'
         | 'description' | 'genericName' | 'mnemonic' | 'brandName'
   operator: 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'matches_regex' | 'in'
   value: string
