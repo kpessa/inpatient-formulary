@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import type { FormularyItem, DrugCategory, SearchFilterGroup, DesignPattern, LinterViolation } from "@/lib/types"
+import type { FormularyItem, DrugCategory, CategoryRule, SearchFilterGroup, DesignPattern, LinterViolation } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
 import type { DomainValue } from "@/lib/formulary-diff"
 import { computeLintViolations } from "@/lib/linter"
@@ -285,6 +285,27 @@ function queryStateToParsedQuery(state: QueryState): ParsedQuery {
 function parseAdvancedQuery(raw: string): ParsedQuery {
   const state = parseQueryToState(raw, FIELD_ALIASES, ALL_CATALOG_FIELDS)
   return queryStateToParsedQuery(state)
+}
+
+// Convert CategoryRule[] → QueryState so the QueryBuilder can display category rules
+function rulesToQueryState(rules: CategoryRule[]): QueryState {
+  const tokens: QueryToken[] = []
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i]
+    if (i > 0) tokens.push({ id: Math.random().toString(36).slice(2), type: 'op', op: 'OR' })
+    let valueStr: string
+    switch (rule.operator) {
+      case 'contains':    valueStr = `*${rule.value}*`; break
+      case 'starts_with': valueStr = `${rule.value}*`;  break
+      case 'ends_with':   valueStr = `*${rule.value}`;  break
+      case 'in':          valueStr = `IN(${rule.value})`; break
+      default:            valueStr = rule.value  // equals, matches_regex
+    }
+    const fieldLabel = ALL_CATALOG_FIELDS.find(f => f.key === (rule.field as string))?.label ?? rule.field
+    tokens.push({ id: Math.random().toString(36).slice(2), type: 'clause', field: rule.field as string, fieldLabel, value: valueStr, negated: false })
+  }
+  const isAdvanced = rules.length > 1 || rules.some(r => r.field !== 'description')
+  return { tokens, isAdvanced, parensValid: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -645,9 +666,25 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       setResults([])
       setTotal(0)
       setGroupCategories({})
+      setQueryState(null)
+      setSearchValue('')
+      setInputValue('')
       return
     }
-    const { pyxisIds } = await fetch(`/api/categories/${catId}/pyxis-ids`).then(r => r.json()) as { pyxisIds: string[] }
+    // Fetch rules + pyxis IDs in parallel
+    const [catData, { pyxisIds }] = await Promise.all([
+      fetch(`/api/categories/${catId}`).then(r => r.json()) as Promise<{ category: { id: string; name: string }; rules: CategoryRule[] }>,
+      fetch(`/api/categories/${catId}/pyxis-ids`).then(r => r.json()) as Promise<{ pyxisIds: string[] }>,
+    ])
+    // Populate QueryBuilder with the category's rules
+    if (catData.rules && catData.rules.length > 0) {
+      const qs = rulesToQueryState(catData.rules)
+      setQueryState(qs)
+      setSearchValue(serializeQueryCompact(qs.tokens))
+    } else {
+      setQueryState(null)
+      setSearchValue('')
+    }
     setCategorySearchActive(true)
     const gen = ++searchGenRef.current
     setResults([])
