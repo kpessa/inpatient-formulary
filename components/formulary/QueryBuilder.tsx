@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { createPortal } from "react-dom"
+import type { CategoryRule } from '@/lib/types'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -239,6 +240,34 @@ export async function evaluateQueryState<T extends AnyResult>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// rulesToQueryState — convert CategoryRule[] → QueryState for display
+// Token id === rule.id to enable round-trip deletion
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function rulesToQueryState(
+  rules: CategoryRule[],
+  fieldLabels: Record<string, string> = {},
+): QueryState {
+  const tokens: QueryToken[] = []
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i]
+    if (i > 0) tokens.push({ id: `op-${rule.id}`, type: 'op', op: 'OR' })
+    let valueStr: string
+    switch (rule.operator) {
+      case 'contains':    valueStr = `*${rule.value}*`; break
+      case 'starts_with': valueStr = `${rule.value}*`;  break
+      case 'ends_with':   valueStr = `*${rule.value}`;  break
+      case 'in':          valueStr = `IN(${rule.value})`; break
+      default:            valueStr = rule.value
+    }
+    const fieldLabel = fieldLabels[rule.field] ?? rule.field
+    tokens.push({ id: rule.id, type: 'clause', field: rule.field, fieldLabel, value: valueStr, negated: false })
+  }
+  const isAdvanced = rules.length > 1 || rules.some(r => r.field !== 'description')
+  return { tokens, isAdvanced, parensValid: true }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // QueryBuilder Component
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -246,7 +275,7 @@ interface QueryBuilderProps {
   state: QueryState
   mode: 'compact' | 'visual'
   onTokensChange: (tokens: QueryToken[]) => void
-  onEditClause: (clause: ClauseToken) => void
+  onEditClause?: (clause: ClauseToken) => void
 }
 
 export function QueryBuilder({ state, mode, onTokensChange, onEditClause }: QueryBuilderProps) {
@@ -358,7 +387,7 @@ export function QueryBuilder({ state, mode, onTokensChange, onEditClause }: Quer
                   borderColor: c.negated ? '#CC0000' : '#316AC5',
                   color: c.negated ? '#CC0000' : '#316AC5',
                 }}
-                onClick={() => onEditClause(c)}
+                onClick={() => onEditClause?.(c)}
                 title="Click to edit"
               >
                 {c.negated && <span className="font-bold text-[#CC0000] mr-0.5">NOT</span>}
@@ -458,7 +487,7 @@ export function QueryBuilder({ state, mode, onTokensChange, onEditClause }: Quer
                 draggable
                 onDragStart={() => handleDragStart(c.id)}
                 onDragEnd={() => { setDragId(null); setDropBeforeId(null) }}
-                onClick={() => onEditClause(c)}
+                onClick={() => onEditClause?.(c)}
                 onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, clauseId: c.id }) }}
                 title="Click to edit · right-click for options"
               >
@@ -528,7 +557,7 @@ export function QueryBuilder({ state, mode, onTokensChange, onEditClause }: Quer
                 {c.negated ? 'Remove NOT' : 'Add NOT'}
               </button>
               <button
-                onClick={() => { onEditClause(c); setCtxMenu(null) }}
+                onClick={() => { onEditClause?.(c); setCtxMenu(null) }}
                 className="w-full text-left px-3 py-0.5 text-xs hover:bg-[#316AC5] hover:text-white"
               >
                 Edit…

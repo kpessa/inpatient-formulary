@@ -1,9 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { DrugCategory, CategoryRule, CategoryMember, SearchFilterGroup } from '@/lib/types'
+import type { DrugCategory, CategoryRule, SearchFilterGroup } from '@/lib/types'
 import { TC_MAP, TC_PARENTS, tcLabel, tcHasChildren } from '@/lib/therapeutic-class-map'
 import { TherapeuticClassPicker } from './TherapeuticClassPicker'
+import { FieldFilterSelect, type AdvFilterItem } from './FieldFilterSelect'
+import { QueryBuilder, rulesToQueryState } from './QueryBuilder'
+import type { QueryToken } from './QueryBuilder'
 
 const COLOR_PALETTE = [
   '#6B7280', '#EF4444', '#F97316', '#EAB308',
@@ -15,6 +18,7 @@ const RULE_FIELDS: { value: CategoryRule['field']; label: string }[] = [
   { value: 'dispenseCategory', label: 'Dispense Category' },
   { value: 'therapeuticClass', label: 'Therapeutic Class' },
   { value: 'dosageForm',       label: 'Dosage Form' },
+  { value: 'route',            label: 'Route' },
   { value: 'status',           label: 'Status' },
   { value: 'strength',         label: 'Strength' },
 ]
@@ -24,7 +28,12 @@ const RULE_OPERATORS: { value: CategoryRule['operator']; label: string }[] = [
   { value: 'contains',    label: 'contains' },
   { value: 'starts_with', label: 'starts with' },
   { value: 'ends_with',   label: 'ends with' },
+  { value: 'in',          label: 'is one of' },
 ]
+
+const RULE_FIELD_LABELS: Record<string, string> = Object.fromEntries(
+  RULE_FIELDS.map(f => [f.value, f.label])
+)
 
 interface Props {
   open: boolean
@@ -33,9 +42,8 @@ interface Props {
   onFocus?: () => void
   focused?: boolean
   minimized?: boolean
+  onOpenSearch?: (categoryId: string) => void
 }
-
-type RightTab = 'members' | 'rules' | 'pyxis'
 
 type Rect = { x: number; y: number; w: number; h: number }
 
@@ -44,7 +52,7 @@ const MIN_H = 400
 
 const inputCls = 'w-full text-[11px] font-mono rounded-none border border-[#808080] px-1.5 py-0.5 bg-white focus:outline-none focus:border-[#316AC5]'
 
-export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = true, minimized = false }: Props) {
+export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = true, minimized = false, onOpenSearch }: Props) {
   // Window geometry
   const [rect, setRect] = useState<Rect | null>(null)
   const [maximized, setMaximized] = useState(false)
@@ -112,20 +120,26 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   // Right panel state
-  const [rightTab, setRightTab] = useState<RightTab>('members')
   const [editName, setEditName] = useState('')
   const [editDesc, setEditDesc] = useState('')
   const [editColor, setEditColor] = useState('#6B7280')
   const [rules, setRules] = useState<CategoryRule[]>([])
-  const [members, setMembers] = useState<CategoryMember[]>([])
-  const [membersLoading, setMembersLoading] = useState(false)
-  const [pyxisIds, setPyxisIds] = useState<string[]>([])
-  const [pyxisInput, setPyxisInput] = useState('')
-  const [pyxisSaving, setPyxisSaving] = useState(false)
-  const [pyxisPopulating, setPyxisPopulating] = useState(false)
-  const [pyxisPopulateMsg, setPyxisPopulateMsg] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // Rules display mode
+  const [queryMode, setQueryMode] = useState<'compact' | 'visual'>('compact')
+
+  // AdvFilter state for rules tab
+  const [catAdvFilter, setCatAdvFilter] = useState({
+    tcItems: [] as AdvFilterItem[],
+    dfItems: [] as AdvFilterItem[],
+    rtItems: [] as AdvFilterItem[],
+    dcItems: [] as AdvFilterItem[],
+  })
+  const [rulesDirty, setRulesDirty] = useState(false)
+  const [rulesSaving, setRulesSaving] = useState(false)
+  const advFilterLoadedRef = useRef(false)
 
   // New rule form
   const [newRuleField, setNewRuleField] = useState<CategoryRule['field']>('dispenseCategory')
@@ -177,6 +191,23 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
 
   useEffect(() => { fetchFieldValues(newRuleField) }, [newRuleField, fetchFieldValues])
 
+  // ── Filter Groups (must be above selectCategory which uses filterGroups) ──
+  const [filterGroups, setFilterGroups] = useState<SearchFilterGroup[]>([])
+  const [filterGroupsLoading, setFilterGroupsLoading] = useState(false)
+
+  const fetchFilterGroups = useCallback(() => {
+    setFilterGroupsLoading(true)
+    fetch('/api/filter-groups')
+      .then(r => r.json())
+      .then((d: { groups: SearchFilterGroup[] }) => setFilterGroups(d.groups ?? []))
+      .catch(() => setFilterGroups([]))
+      .finally(() => setFilterGroupsLoading(false))
+  }, [])
+
+  useEffect(() => {
+    if (open) fetchFilterGroups()
+  }, [open, fetchFilterGroups])
+
   const fetchCategories = useCallback(() => {
     setLoading(true)
     fetch('/api/categories')
@@ -194,82 +225,51 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
     setEditDesc(cat.description)
     setEditColor(cat.color)
     setRules([])
-    setMembers([])
-    setPyxisIds([])
-    setPyxisInput('')
-    setPyxisPopulateMsg(null)
     setConfirmDelete(false)
-    setRightTab('members')
+    setCatAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
+    setRulesDirty(false)
+    advFilterLoadedRef.current = false
 
     fetch(`/api/categories/${cat.id}`)
       .then(r => r.json())
       .then((d: { category: DrugCategory; rules: CategoryRule[] }) => {
-        setRules(d.rules ?? [])
+        const allRules = d.rules ?? []
+        // Split rules: advFilter fields vs query-builder fields
+        const ADV_FILTER_FIELDS = new Set(['dosageForm', 'route', 'dispenseCategory', 'therapeuticClass'])
+        const queryRules = allRules.filter(r => !ADV_FILTER_FIELDS.has(r.field as string))
+        const filterRulesArr = allRules.filter(r => ADV_FILTER_FIELDS.has(r.field as string))
+
+        setRules(queryRules)
+
+        // Build advFilter items from filter rules
+        const newAdvFilter = { tcItems: [] as AdvFilterItem[], dfItems: [] as AdvFilterItem[], rtItems: [] as AdvFilterItem[], dcItems: [] as AdvFilterItem[] }
+        for (const rule of filterRulesArr) {
+          const field = rule.field as string
+          const values = field === 'therapeuticClass'
+            ? [rule.value]
+            : rule.value.split(',').map(v => v.trim()).filter(Boolean)
+          if (field === 'therapeuticClass') {
+            newAdvFilter.tcItems.push({ id: rule.value, type: 'tc', op: 'include', label: tcLabel(rule.value) || rule.value, icon: '', values })
+          } else {
+            const sfField = field === 'dosageForm' ? 'dosage_form' as const
+              : field === 'route' ? 'route' as const
+              : 'dispense_category' as const
+            const matchedGroup = filterGroups.find(g =>
+              g.field === sfField && values.length === g.values.length && values.every(v => g.values.includes(v))
+            )
+            const item: AdvFilterItem = matchedGroup
+              ? { id: matchedGroup.id, type: 'group', op: 'include', label: matchedGroup.name, icon: matchedGroup.icon, values: matchedGroup.values }
+              : { id: values.join(','), type: 'value', op: 'include', label: values.slice(0, 2).join(', ') + (values.length > 2 ? '...' : ''), icon: '', values }
+            if (field === 'dosageForm') newAdvFilter.dfItems.push(item)
+            else if (field === 'route') newAdvFilter.rtItems.push(item)
+            else newAdvFilter.dcItems.push(item)
+          }
+        }
+        setCatAdvFilter(newAdvFilter)
+        advFilterLoadedRef.current = true
       })
       .catch(() => {})
-  }, [])
-
-  const fetchMembers = useCallback((catId: string) => {
-    setMembersLoading(true)
-    fetch(`/api/categories/${catId}/members`)
-      .then(r => r.json())
-      .then((d: { members: CategoryMember[] }) => setMembers(d.members ?? []))
-      .catch(() => setMembers([]))
-      .finally(() => setMembersLoading(false))
-  }, [])
-
-  useEffect(() => {
-    if (selectedId && rightTab === 'members') fetchMembers(selectedId)
-  }, [selectedId, rightTab, fetchMembers])
-
-  useEffect(() => {
-    if (!selectedId || rightTab !== 'pyxis') return
-    fetch(`/api/categories/${selectedId}/pyxis-ids`)
-      .then(r => r.json())
-      .then((d: { pyxisIds: string[] }) => setPyxisIds(d.pyxisIds ?? []))
-      .catch(() => {})
-  }, [selectedId, rightTab])
-
-  const addPyxisId = async () => {
-    const id = pyxisInput.trim()
-    if (!id || !selectedId || pyxisIds.includes(id)) return
-    setPyxisSaving(true)
-    try {
-      await fetch(`/api/categories/${selectedId}/pyxis-ids`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pyxisId: id }),
-      })
-      setPyxisIds(prev => [...prev, id])
-      setPyxisInput('')
-    } finally {
-      setPyxisSaving(false)
-    }
-  }
-
-  const removePyxisId = async (pid: string) => {
-    if (!selectedId) return
-    await fetch(`/api/categories/${selectedId}/pyxis-ids`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pyxisId: pid }),
-    })
-    setPyxisIds(prev => prev.filter(p => p !== pid))
-  }
-
-  const populateFromRules = async () => {
-    if (!selectedId) return
-    setPyxisPopulating(true)
-    setPyxisPopulateMsg(null)
-    try {
-      const res = await fetch(`/api/categories/${selectedId}/pyxis-ids`, { method: 'PATCH' })
-      const { added, pyxisIds: updated } = await res.json() as { added: number; pyxisIds: string[] }
-      setPyxisIds(updated)
-      setPyxisPopulateMsg(`Added ${added} new ID${added !== 1 ? 's' : ''} (${updated.length} total)`)
-    } finally {
-      setPyxisPopulating(false)
-    }
-  }
+  }, [filterGroups])
 
   const saveEdits = async () => {
     if (!selectedId) return
@@ -342,36 +342,62 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
     })
     setRules(prev => prev.filter(r => r.id !== ruleId))
     fetchCategories()
-    if (rightTab === 'members') fetchMembers(selectedId)
   }
 
-  const removeMember = async (groupId: string) => {
-    if (!selectedId) return
-    await fetch(`/api/categories/${selectedId}/members`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupId }),
-    })
-    setMembers(prev => prev.filter(m => m.groupId !== groupId))
-    fetchCategories()
-  }
-
-  const removeExclusion = async (groupId: string) => {
-    if (!selectedId) return
-    await fetch(`/api/categories/${selectedId}/exclusions`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupId }),
-    })
-    setMembers(prev => prev.filter(m => !(m.groupId === groupId && m.source === 'excluded')))
-    fetchCategories()
-  }
+  const handleRuleTokensChange = useCallback(async (newTokens: QueryToken[]) => {
+    const oldIds = new Set(rules.map(r => r.id))
+    const newIds = new Set(newTokens.filter(t => t.type === 'clause').map(t => t.id))
+    const removed = [...oldIds].filter(id => !newIds.has(id))
+    for (const ruleId of removed) {
+      await removeRule(ruleId)
+    }
+  }, [rules]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedCat = categories.find(c => c.id === selectedId)
 
-  // ── Filter Groups state ──────────────────────────────────────────────────
-  const [filterGroups, setFilterGroups] = useState<SearchFilterGroup[]>([])
-  const [filterGroupsLoading, setFilterGroupsLoading] = useState(false)
+  // Mark dirty when advFilter changes (after initial load)
+  useEffect(() => {
+    if (advFilterLoadedRef.current) setRulesDirty(true)
+  }, [catAdvFilter])
+
+  // Save all rules (query-builder + advFilter) to the category
+  const saveAllRules = async () => {
+    if (!selectedId) return
+    setRulesSaving(true)
+    try {
+      // 1. Clear existing rules
+      await fetch(`/api/categories/${selectedId}/rules`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+
+      // 2. Re-add from advFilter
+      const posts: Promise<unknown>[] = []
+      const postRule = (body: object) => posts.push(
+        fetch(`/api/categories/${selectedId}/rules`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      )
+      for (const item of catAdvFilter.dfItems)
+        if (item.op === 'include' && item.values.length > 0) postRule({ field: 'dosageForm', operator: 'in', value: item.values.join(',') })
+      for (const item of catAdvFilter.rtItems)
+        if (item.op === 'include' && item.values.length > 0) postRule({ field: 'route', operator: 'in', value: item.values.join(',') })
+      for (const item of catAdvFilter.dcItems)
+        if (item.op === 'include' && item.values.length > 0) postRule({ field: 'dispenseCategory', operator: 'in', value: item.values.join(',') })
+      for (const item of catAdvFilter.tcItems)
+        if (item.op === 'include') postRule({ field: 'therapeuticClass', operator: 'equals', value: item.id })
+
+      // 3. Re-add query-builder rules
+      for (const rule of rules) {
+        postRule({ field: rule.field, operator: rule.operator, value: rule.value })
+      }
+
+      await Promise.all(posts)
+      setRulesDirty(false)
+      fetchCategories()
+      // Reload to get fresh rule IDs
+      const cat = categories.find(c => c.id === selectedId)
+      if (cat) selectCategory(cat)
+    } finally {
+      setRulesSaving(false)
+    }
+  }
+
   const [selectedFGId, setSelectedFGId] = useState<string | null>(null)
   // Edit form
   const [fgName, setFgName] = useState('')
@@ -387,19 +413,6 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
   const [valueSearch, setValueSearch] = useState('')
   // Load defaults
   const [loadingDefaults, setLoadingDefaults] = useState(false)
-
-  const fetchFilterGroups = useCallback(() => {
-    setFilterGroupsLoading(true)
-    fetch('/api/filter-groups')
-      .then(r => r.json())
-      .then((d: { groups: SearchFilterGroup[] }) => setFilterGroups(d.groups ?? []))
-      .catch(() => setFilterGroups([]))
-      .finally(() => setFilterGroupsLoading(false))
-  }, [])
-
-  useEffect(() => {
-    if (open && mainTab === 'filter-groups') fetchFilterGroups()
-  }, [open, mainTab, fetchFilterGroups])
 
   const fetchDistinctValues = useCallback((field: SearchFilterGroup['field']) => {
     setDistinctLoading(true)
@@ -934,178 +947,116 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
                 </div>
               </div>
 
-              {/* Tabs */}
-              <div className="flex gap-0.5 px-2 pt-1.5 border-b border-[#808080] shrink-0">
-                {(['members', 'rules', 'pyxis'] as RightTab[]).map(tab => (
+              {/* Rules header bar */}
+              <div className="flex items-center gap-1 px-2 py-1 border-b border-[#808080] shrink-0">
+                <span className="text-[10px] font-mono font-bold text-[#404040]">
+                  Rules ({rules.length + catAdvFilter.tcItems.length + catAdvFilter.dfItems.length + catAdvFilter.rtItems.length + catAdvFilter.dcItems.length})
+                </span>
+                {onOpenSearch && selectedId && (
                   <button
-                    key={tab}
-                    onClick={() => setRightTab(tab)}
-                    className={`px-2 py-0.5 text-[10px] font-mono border-t border-l border-r border-[#808080] rounded-t-sm ${
-                      rightTab === tab
-                        ? 'bg-[#D4D0C8] border-b-[#D4D0C8] relative z-10 top-[1px] -mb-[1px]'
-                        : 'bg-[#C8C4BC] hover:bg-[#D4D0C8] mt-0.5 border-b-[#808080]'
-                    }`}
+                    onClick={() => onOpenSearch(selectedId)}
+                    className="ml-auto px-2 py-0.5 text-[10px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]"
+                    title="Test this category in Search"
                   >
-                    {tab === 'members'
-                      ? `Members (${selectedCat ? selectedCat.manualCount : 0} manual)`
-                      : tab === 'rules'
-                      ? `Rules (${rules.length})`
-                      : `Pyxis IDs${pyxisIds.length > 0 ? ` (${pyxisIds.length})` : ''}`}
+                    Test in Search
                   </button>
-                ))}
+                )}
               </div>
 
-              {/* Tab content */}
+              {/* Rules content */}
               <div className="flex-1 overflow-y-auto p-2 min-h-0">
-                {rightTab === 'members' && (
-                  <>
-                    {membersLoading ? (
-                      <div className="text-[10px] text-[#808080]">Resolving members…</div>
-                    ) : members.length === 0 ? (
-                      <div className="text-[10px] text-[#808080]">
-                        No members. Add drugs via right-click in Search, or add rules below.
-                      </div>
-                    ) : (
-                      <table className="w-full border-collapse text-[10px]">
-                        <thead>
-                          <tr className="border-b border-[#808080] bg-[#C8C4BC]">
-                            <th className="text-left px-1.5 py-0.5 font-mono font-bold">Description</th>
-                            <th className="text-left px-1.5 py-0.5 font-mono font-bold">Group ID</th>
-                            <th className="text-left px-1.5 py-0.5 font-mono font-bold">Source</th>
-                            <th className="px-1.5 py-0.5" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {members.map((m, i) => (
-                            <tr
-                              key={m.groupId}
-                              className={`border-b border-[#E0DDD8] ${i % 2 === 0 ? 'bg-white' : 'bg-[#F8F8F8]'}`}
-                            >
-                              <td className="px-1.5 py-0.5 truncate max-w-xs">{m.drugDescription}</td>
-                              <td className="px-1.5 py-0.5 text-[#406090] whitespace-nowrap">{m.groupId}</td>
-                              <td className="px-1.5 py-0.5 whitespace-nowrap">
-                                {m.source === 'manual' ? (
-                                  <span className="bg-[#316AC5] text-white px-1 py-[1px] rounded-sm text-[9px]">manual</span>
-                                ) : m.source === 'excluded' ? (
-                                  <span className="bg-[#808080] text-white px-1 py-[1px] rounded-sm text-[9px]">excluded</span>
-                                ) : (
-                                  <span className="bg-[#22C55E] text-white px-1 py-[1px] rounded-sm text-[9px]">rule</span>
-                                )}
-                              </td>
-                              <td className="px-1.5 py-0.5 text-right whitespace-nowrap">
-                                {m.source === 'manual' && (
-                                  <button
-                                    onClick={() => removeMember(m.groupId)}
-                                    className="text-[9px] text-[#CC0000] hover:underline"
-                                  >
-                                    ✕ Remove
-                                  </button>
-                                )}
-                                {m.source === 'excluded' && (
-                                  <button
-                                    onClick={() => removeExclusion(m.groupId)}
-                                    className="text-[9px] text-[#316AC5] hover:underline"
-                                  >
-                                    ↩ Un-exclude
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </>
-                )}
-
-                {rightTab === 'pyxis' && (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex gap-1">
-                      <input
-                        value={pyxisInput}
-                        onChange={e => setPyxisInput(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && addPyxisId()}
-                        placeholder="Pyxis ID…"
-                        className={inputCls + ' flex-1'}
-                      />
-                      <button
-                        onClick={addPyxisId}
-                        disabled={pyxisSaving || !pyxisInput.trim()}
-                        className="px-2 py-0.5 text-[10px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DCD4] disabled:opacity-40 shrink-0"
-                      >
-                        Add
-                      </button>
-                    </div>
-                    {rules.length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={populateFromRules}
-                          disabled={pyxisPopulating}
-                          className="px-2 py-0.5 text-[10px] font-mono border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DCD4] disabled:opacity-40 shrink-0"
-                          title="Run all rules, look up Pyxis IDs for matched drugs, and add them to this list"
-                        >
-                          {pyxisPopulating ? 'Populating…' : `Populate from Rules (${rules.length})`}
-                        </button>
-                        {pyxisPopulateMsg && (
-                          <span className="text-[9px] text-[#22C55E] font-mono">{pyxisPopulateMsg}</span>
+                  <div className="space-y-2">
+                    {/* AdvFilter row: TC / dosage form / route / dispense category */}
+                    <div className="border border-[#808080] p-2 bg-[#F0EEE8] space-y-1.5">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] font-mono font-bold text-[#404040]">Filters</span>
+                        {rulesDirty && (
+                          <button
+                            onClick={saveAllRules}
+                            disabled={rulesSaving}
+                            className="ml-auto text-[10px] font-mono px-2 py-0.5 bg-[#316AC5] text-white border border-[#1a4a9a] disabled:opacity-50 shrink-0"
+                          >
+                            {rulesSaving ? 'Saving…' : 'Save Rules'}
+                          </button>
                         )}
                       </div>
-                    )}
-                    {pyxisIds.length === 0 ? (
-                      <div className="text-[10px] text-[#808080]">No Pyxis IDs. Type one above and press Enter or Add.</div>
-                    ) : (
-                      <div className="flex flex-col gap-0.5">
-                        {pyxisIds.map(pid => (
-                          <div key={pid} className="flex items-center justify-between px-1.5 py-0.5 bg-white border border-[#D0CCC8] text-[10px] font-mono">
-                            <span>{pid}</span>
-                            <button
-                              onClick={() => removePyxisId(pid)}
-                              className="text-[9px] text-[#CC0000] hover:underline ml-2 shrink-0"
-                            >
-                              ✕ Remove
-                            </button>
-                          </div>
-                        ))}
+                      <div className="flex flex-wrap items-center gap-1">
+                        <TherapeuticClassPicker
+                          value=""
+                          onChange={code => {
+                            if (catAdvFilter.tcItems.find(i => i.id === code)) return
+                            setCatAdvFilter(prev => ({
+                              ...prev,
+                              tcItems: [...prev.tcItems, {
+                                id: code, type: 'tc', op: 'include',
+                                label: tcLabel(code), icon: '', values: [code],
+                              }],
+                            }))
+                          }}
+                        >
+                          <button className={`h-5 px-1.5 text-[9px] font-mono border border-[#808080] shadow-[inset_1px_1px_0_#fff,inset_-1px_-1px_0_#808080] whitespace-nowrap ${
+                            catAdvFilter.tcItems.length > 0 ? 'bg-[#E8F0FF] border-[#316AC5] text-[#316AC5]' : 'bg-[#D4D0C8] hover:bg-[#E8E8E0] text-black'
+                          }`}>
+                            TC {catAdvFilter.tcItems.length > 0 && `(${catAdvFilter.tcItems.length})`}
+                          </button>
+                        </TherapeuticClassPicker>
+                        <FieldFilterSelect compact field="dosage_form" filterGroups={filterGroups} items={catAdvFilter.dfItems} onChange={items => setCatAdvFilter(prev => ({ ...prev, dfItems: items }))} />
+                        <FieldFilterSelect compact field="route" filterGroups={filterGroups} items={catAdvFilter.rtItems} onChange={items => setCatAdvFilter(prev => ({ ...prev, rtItems: items }))} />
+                        <FieldFilterSelect compact field="dispense_category" filterGroups={filterGroups} items={catAdvFilter.dcItems} onChange={items => setCatAdvFilter(prev => ({ ...prev, dcItems: items }))} />
                       </div>
-                    )}
-                  </div>
-                )}
-
-                {rightTab === 'rules' && (
-                  <div className="space-y-2">
-                    {rules.length === 0 ? (
-                      <div className="text-[10px] text-[#808080]">No rules. Add one below.</div>
-                    ) : (
-                      <div className="space-y-1">
-                        {rules.map(rule => (
-                          <div
-                            key={rule.id}
-                            className="flex items-center gap-1.5 px-2 py-1 bg-white border border-[#D0CCC8]"
-                          >
-                            <span className="text-[10px] font-mono">
-                              <span className="bg-[#E8EEFF] px-1 rounded text-[#316AC5]">
-                                {RULE_FIELDS.find(f => f.value === rule.field)?.label ?? rule.field}
-                              </span>
-                              {' '}
-                              <span className="text-[#808080]">
-                                {RULE_OPERATORS.find(o => o.value === rule.operator)?.label ?? rule.operator}
-                              </span>
-                              {' '}
-                              <span className="bg-[#FFF8E0] px-1 rounded text-[#806000]">
-                                {rule.field === 'therapeuticClass' ? tcLabel(rule.value) : rule.value}
-                                {rule.field === 'therapeuticClass' && tcHasChildren(rule.value) && (
-                                  <span className="ml-1 text-[8px] text-[#316AC5] font-bold" title="Includes all subcategories">⊇</span>
-                                )}
-                              </span>
+                      {/* Chips for active advFilter items */}
+                      {(catAdvFilter.tcItems.length + catAdvFilter.dfItems.length + catAdvFilter.rtItems.length + catAdvFilter.dcItems.length) > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {catAdvFilter.tcItems.map(item => (
+                            <span key={item.id} className="flex items-center gap-0.5 bg-[#316AC5] text-white text-[9px] font-mono px-1.5 py-0.5 border border-[#1a4a9a]">
+                              TC: {item.label}
+                              <button onClick={() => setCatAdvFilter(prev => ({ ...prev, tcItems: prev.tcItems.filter(i => i.id !== item.id) }))} className="ml-0.5 text-[8px] hover:text-[#FFCCCC]">x</button>
                             </span>
-                            <button
-                              onClick={() => removeRule(rule.id)}
-                              className="ml-auto text-[9px] text-[#CC0000] hover:underline shrink-0"
-                            >
-                              ✕
+                          ))}
+                          {catAdvFilter.dfItems.map(item => (
+                            <span key={item.id} className="flex items-center gap-0.5 bg-[#22C55E] text-white text-[9px] font-mono px-1.5 py-0.5 border border-[#16a34a]">
+                              DF: {item.label}
+                              <button onClick={() => setCatAdvFilter(prev => ({ ...prev, dfItems: prev.dfItems.filter(i => i.id !== item.id) }))} className="ml-0.5 text-[8px] hover:text-[#FFCCCC]">x</button>
+                            </span>
+                          ))}
+                          {catAdvFilter.rtItems.map(item => (
+                            <span key={item.id} className="flex items-center gap-0.5 bg-[#F97316] text-white text-[9px] font-mono px-1.5 py-0.5 border border-[#ea580c]">
+                              RT: {item.label}
+                              <button onClick={() => setCatAdvFilter(prev => ({ ...prev, rtItems: prev.rtItems.filter(i => i.id !== item.id) }))} className="ml-0.5 text-[8px] hover:text-[#FFCCCC]">x</button>
+                            </span>
+                          ))}
+                          {catAdvFilter.dcItems.map(item => (
+                            <span key={item.id} className="flex items-center gap-0.5 bg-[#8B5CF6] text-white text-[9px] font-mono px-1.5 py-0.5 border border-[#7c3aed]">
+                              DC: {item.label}
+                              <button onClick={() => setCatAdvFilter(prev => ({ ...prev, dcItems: prev.dcItems.filter(i => i.id !== item.id) }))} className="ml-0.5 text-[8px] hover:text-[#FFCCCC]">x</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* QueryBuilder rules */}
+                    {rules.length === 0 ? (
+                      <div className="text-[10px] text-[#808080]">No query rules. Add one below, or use the filters above.</div>
+                    ) : (
+                      <div>
+                        <div className="flex gap-1 mb-1.5">
+                          {(['compact', 'visual'] as const).map(m => (
+                            <button key={m} onClick={() => setQueryMode(m)}
+                              className={`text-[9px] px-1.5 py-0.5 border font-mono ${
+                                queryMode === m
+                                  ? 'border-[#316AC5] bg-[#316AC5] text-white'
+                                  : 'border-[#808080] bg-[#D4D0C8] text-[#404040] hover:bg-[#C0C0C0]'
+                              }`}>
+                              {m === 'compact' ? 'Compact' : 'Visual'}
                             </button>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
+                        <QueryBuilder
+                          state={rulesToQueryState(rules, RULE_FIELD_LABELS)}
+                          mode={queryMode}
+                          onTokensChange={handleRuleTokensChange}
+                        />
                       </div>
                     )}
 
@@ -1267,7 +1218,6 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
                       )}
                     </div>
                   </div>
-                )}
               </div>
             </>
           )}

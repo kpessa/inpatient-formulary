@@ -28,8 +28,7 @@ import { TherapeuticClassPicker } from "./TherapeuticClassPicker"
 import { tcDescendants, tcLabel } from "@/lib/therapeutic-class-map"
 import { FieldFilterSelect, FilterChips, type AdvFilterItem } from "./FieldFilterSelect"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
-import { type ClauseToken, type OpToken, type QueryToken, type QueryState, parseQueryToState, serializeQueryCompact, evaluateQueryState } from "./QueryBuilder"
-import { QueryBuilder } from "./QueryBuilder"
+import { type ClauseToken, type OpToken, type QueryToken, type QueryState, parseQueryToState, serializeQueryCompact, evaluateQueryState, rulesToQueryState, QueryBuilder } from "./QueryBuilder"
 
 type UnifiedResult = SearchResult & { _allDomains: string[] }
 
@@ -93,6 +92,8 @@ interface SearchModalProps {
   availableDomains: { region: string; env: string; domain: string }[]
   onSelect: (item: FormularyItem) => void
   onCreateTask?: (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[]) => void
+  onOpenCategoryManager?: () => void
+  categoryTrigger?: { categoryId: string; seq: number } | null
 }
 
 const CORP_FACILITIES = new Set(["UHS Corp", "UHST", "UHSB"])
@@ -288,26 +289,6 @@ function parseAdvancedQuery(raw: string): ParsedQuery {
 }
 
 // Convert CategoryRule[] → QueryState so the QueryBuilder can display category rules
-function rulesToQueryState(rules: CategoryRule[]): QueryState {
-  const tokens: QueryToken[] = []
-  for (let i = 0; i < rules.length; i++) {
-    const rule = rules[i]
-    if (i > 0) tokens.push({ id: Math.random().toString(36).slice(2), type: 'op', op: 'OR' })
-    let valueStr: string
-    switch (rule.operator) {
-      case 'contains':    valueStr = `*${rule.value}*`; break
-      case 'starts_with': valueStr = `${rule.value}*`;  break
-      case 'ends_with':   valueStr = `*${rule.value}`;  break
-      case 'in':          valueStr = `IN(${rule.value})`; break
-      default:            valueStr = rule.value  // equals, matches_regex
-    }
-    const fieldLabel = ALL_CATALOG_FIELDS.find(f => f.key === (rule.field as string))?.label ?? rule.field
-    tokens.push({ id: Math.random().toString(36).slice(2), type: 'clause', field: rule.field as string, fieldLabel, value: valueStr, negated: false })
-  }
-  const isAdvanced = rules.length > 1 || rules.some(r => r.field !== 'description')
-  return { tokens, isAdvanced, parensValid: true }
-}
-
 // ---------------------------------------------------------------------------
 // TokenSearchInput — pill-based search bar with field picker dropdown
 // ---------------------------------------------------------------------------
@@ -551,7 +532,7 @@ function classifyActiveFields(q: string, activeFields: Set<string>): Set<string>
   return new Set(candidates.filter(f => activeFields.has(f)))
 }
 
-export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask }: SearchModalProps) {
+export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, categoryTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask, onOpenCategoryManager }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState("")
   const [inputValue, setInputValue] = useState("")  // what TokenSearchInput displays (cleared on submit)
@@ -719,7 +700,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
     // Restore QueryBuilder from query rules
     if (queryRules.length > 0) {
-      const qs = rulesToQueryState(queryRules)
+      const qs = rulesToQueryState(queryRules, Object.fromEntries(ALL_CATALOG_FIELDS.map(f => [f.key, f.label])))
       setQueryState(qs)
       setSearchValue(serializeQueryCompact(qs.tokens))
     } else {
@@ -1415,6 +1396,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchTrigger?.seq])
 
+  // Respond to category selection pushed from CategoryManager
+  useEffect(() => {
+    if (!categoryTrigger) return
+    setShowAdvanced(true)
+    handleCategorySelect(categoryTrigger.categoryId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categoryTrigger?.seq])
+
   const handleExpandSearch = async () => {
     setIsExpanding(true)
     try {
@@ -1926,22 +1915,33 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     </>
                   )
                 })()}
-                {(lastParsedQuery?.isAdvanced || categoryFilter) && displayedResults.length > 0 && (
-                  <button
-                    onClick={() => {
-                      const qName = lastParsedQuery?.clauses.map(c => c.value.replace(/\*/g, '').trim()).filter(Boolean).join(' / ') ?? ''
-                      if (categoryFilter) {
-                        const cat = allCategories.find(c => c.id === categoryFilter)
-                        setSaveCatDialog({ name: (cat?.name ?? qName) || 'New Category', color: cat?.color ?? '#6B7280', saving: false, updateCategoryId: categoryFilter })
-                      } else {
-                        setSaveCatDialog({ name: qName || 'New Category', color: '#6B7280', saving: false })
-                      }
-                    }}
-                    className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] whitespace-nowrap"
-                    title="Save search as a Category with rules + exclusions"
-                  >
-                    ⊞ {categoryFilter ? 'Update / Save Category…' : 'Save as Category…'}
-                  </button>
+                {(lastParsedQuery?.isAdvanced || categoryFilter || advActiveCount > 0) && (
+                  <>
+                    <button
+                      onClick={() => {
+                        const qName = lastParsedQuery?.clauses.map(c => c.value.replace(/\*/g, '').trim()).filter(Boolean).join(' / ') ?? ''
+                        if (categoryFilter) {
+                          const cat = allCategories.find(c => c.id === categoryFilter)
+                          setSaveCatDialog({ name: (cat?.name ?? qName) || 'New Category', color: cat?.color ?? '#6B7280', saving: false, updateCategoryId: categoryFilter })
+                        } else {
+                          setSaveCatDialog({ name: qName || 'New Category', color: '#6B7280', saving: false })
+                        }
+                      }}
+                      className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] whitespace-nowrap"
+                      title="Save search as a Category with rules + exclusions"
+                    >
+                      ⊞ {categoryFilter ? 'Update / Save Category…' : 'Save as Category…'}
+                    </button>
+                    {onOpenCategoryManager && (
+                      <button
+                        onClick={onOpenCategoryManager}
+                        className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] whitespace-nowrap"
+                        title="Open Category Manager"
+                      >
+                        Category Mgr
+                      </button>
+                    )}
+                  </>
                 )}
                 {lintPatterns.length > 0 && (
                   <button

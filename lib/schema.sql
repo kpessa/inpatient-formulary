@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS category_rules (
   id TEXT PRIMARY KEY,
   category_id TEXT NOT NULL REFERENCES drug_categories(id) ON DELETE CASCADE,
   field TEXT NOT NULL,               -- 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'status' | 'strength'
-  operator TEXT NOT NULL CHECK (operator IN ('equals','contains','starts_with','ends_with')),
+  operator TEXT NOT NULL CHECK (operator IN ('equals','contains','starts_with','ends_with','in','matches_regex')),
   value TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );

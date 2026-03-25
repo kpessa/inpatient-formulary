@@ -121,6 +121,7 @@ export default function PharmNetFormulary() {
   const [availableDomains, setAvailableDomains] = useState<{ region: string; env: string; domain: string }[]>([])
   const [searchTrigger, setSearchTrigger] = useState<{ value: string; seq: number } | null>(null)
   const [violationFilterTrigger, setViolationFilterTrigger] = useState<{ patternId: string; seq: number } | null>(null)
+  const [categoryTrigger, setCategoryTrigger] = useState<{ categoryId: string; seq: number } | null>(null)
 
   // Task system state
   const [showRawExtract, setShowRawExtract] = useState(false)
@@ -688,10 +689,12 @@ export default function PharmNetFormulary() {
         onMinimize={() => minimizeWindow('search')}
         searchTrigger={searchTrigger}
         violationFilterTrigger={violationFilterTrigger}
+        categoryTrigger={categoryTrigger}
         scope={scope}
         availableDomains={availableDomains}
         onClose={() => { setIsSearchModalOpen(false); if (focusedWindow === 'search') setFocusedWindow('formulary') }}
         onCreateTask={handleCreateTaskFromSearch}
+        onOpenCategoryManager={() => { setIsCategoryManagerOpen(true); focusWindow('categories') }}
         onSelect={(item) => {
           setSelectedItemPreview(item)
           setIsSearchModalOpen(false)
@@ -768,6 +771,7 @@ export default function PharmNetFormulary() {
         onFocus={() => focusWindow('categories')}
         onMinimize={() => minimizeWindow('categories')}
         onClose={() => { setIsCategoryManagerOpen(false); if (focusedWindow === 'categories') setFocusedWindow('formulary') }}
+        onOpenSearch={(catId) => { setIsSearchModalOpen(true); focusWindow('search'); setCategoryTrigger(prev => ({ categoryId: catId, seq: (prev?.seq ?? 0) + 1 })) }}
       />
 
       {/* Pattern Manager */}

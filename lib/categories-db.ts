@@ -37,6 +37,7 @@ function fieldToSqlExpression(field: string): string {
     case 'genericName':      return 'generic_name'
     case 'mnemonic':         return 'mnemonic'
     case 'brandName':        return 'brand_name'
+    case 'route':            return "json_extract(oe_defaults_json, '$.route')"
     default:                 return 'NULL'
   }
 }
