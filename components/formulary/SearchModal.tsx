@@ -214,6 +214,40 @@ const IDENTIFIER_FIELDS = [
   { label: 'Pyxis Interface ID', field: 'pyxis_id'      as const },
 ]
 
+// Maps user-typed field aliases to API `field` param values
+const FIELD_ALIASES: Record<string, string> = {
+  description: 'description', desc: 'description',
+  generic: 'generic',         gen: 'generic', genericname: 'generic',
+  mnemonic: 'mnemonic',       mnemo: 'mnemonic',
+  brand: 'brand',             brandname: 'brand',
+  charge: 'charge',           chargenumber: 'charge',
+  pyxis: 'pyxis',             pyxisid: 'pyxis',
+}
+
+type QueryClause = { field: string | null; value: string }
+type ParsedQuery = { clauses: QueryClause[]; isAdvanced: boolean }
+
+function parseAdvancedQuery(raw: string): ParsedQuery {
+  // Split on " OR " (case-insensitive, with surrounding whitespace)
+  const parts = raw.trim().split(/\s+OR\s+/i)
+  const clauses: QueryClause[] = []
+  for (const part of parts) {
+    const t = part.trim()
+    if (!t) continue
+    // Match field:"value" or field:value (no spaces in unquoted value)
+    const m = t.match(/^(\w+):"([^"]*)"$/) ?? t.match(/^(\w+):(\S+)$/)
+    if (m) {
+      const alias = m[1].toLowerCase().replace(/[^a-z]/g, '')
+      clauses.push({ field: FIELD_ALIASES[alias] ?? null, value: m[2] })
+    } else {
+      clauses.push({ field: null, value: t })
+    }
+  }
+  if (clauses.length === 0) clauses.push({ field: null, value: raw.trim() })
+  const isAdvanced = clauses.length > 1 || clauses.some(c => c.field !== null)
+  return { clauses, isAdvanced }
+}
+
 function classifyActiveFields(q: string, activeFields: Set<string>): Set<string> {
   const allDigits = /^\d+$/.test(q)
   const looksLikeNdc =
@@ -399,7 +433,11 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const [isLoading, setIsLoading] = useState(false)
   const [isExpanding, setIsExpanding] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string; groupId?: string; description?: string } | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; text: string; groupId?: string; description?: string; semanticKey?: string } | null>(null)
+  const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set())
+  const [saveCatDialog, setSaveCatDialog] = useState<{ name: string; color: string; saving: boolean } | null>(null)
+  // Parsed advanced query: updated whenever a search completes successfully
+  const [lastParsedQuery, setLastParsedQuery] = useState<ParsedQuery | null>(null)
   const [catPicker, setCatPicker] = useState<{ x: number; y: number; groupId: string; description: string; categories: DrugCategory[]; selected: Set<string>; saving: boolean } | null>(null)
   const [total, setTotal] = useState(0)
   const [pendingTotal, setPendingTotal] = useState<number | null>(null)
@@ -767,6 +805,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     setColFilters({})
     setElapsedSec(null)
     setFieldStatus({})
+    setExcludedKeys(new Set())  // clear exclusions on new search
+    const parsed = parseAdvancedQuery(query)
     const t0 = performance.now()
     searchStartRef.current = t0
     let elapsedTimer: ReturnType<typeof setInterval> | null = null
@@ -778,11 +818,78 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     }, 1000)
     try {
       const hasFacilityFilter = selectedFacs.length < allFacilities.length
-      const isWildcard = query.includes('*')
-      const useParallel = !hasFacilityFilter && !isWildcard && activeFields.size > 0 && trimmed.length > 0 && advActiveCount === 0
+
+      // Helper: fetch a single clause via NDJSON stream, return results
+      const fetchClause = async (clause: QueryClause): Promise<SearchResult[]> => {
+        const p = new URLSearchParams({ q: clause.value, limit: String(maxResults) })
+        if (hasFacilityFilter) p.set('facilities', selectedFacs.join(','))
+        if (!showInactive) p.set('showInactive', 'false')
+        if (scope.type === 'domain') { p.set('region', scope.region); p.set('environment', scope.env) }
+        else if (scope.type === 'region') p.set('region', scope.region)
+        else if (scope.type === 'env') p.set('environment', scope.env)
+        if (clause.field) p.set('field', clause.field)
+        const res = await fetch(`/api/formulary/search?${p}`)
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buf = ''
+        let clauseResults: SearchResult[] = []
+        while (true) {
+          const { done, value } = await reader.read()
+          if (value) buf += decoder.decode(value, { stream: !done })
+          const lines = buf.split('\n')
+          buf = lines.pop()!
+          for (const line of lines) {
+            if (!line.trim()) continue
+            const chunk = JSON.parse(line)
+            if ('results' in chunk) clauseResults = chunk.results
+          }
+          if (done) break
+        }
+        return clauseResults
+      }
+
+      // Multi-clause OR: fire parallel requests per clause, merge results
+      if (parsed.clauses.length > 1) {
+        const clauseResultSets = await Promise.all(parsed.clauses.map(fetchClause))
+        const seen = new Set<string>()
+        const finalResults: SearchResult[] = []
+        for (const crs of clauseResultSets) {
+          for (const r of crs) {
+            const key = `${r.groupId}|${r.region}|${r.environment}`
+            if (!seen.has(key)) { seen.add(key); finalResults.push(r) }
+          }
+        }
+        setResults(finalResults)
+        setTotal(finalResults.length)
+        setQueryMs(Math.round(performance.now() - t0))
+        setLastParsedQuery(parsed)
+        setTimeout(() => loadDetails(finalResults, gen), 0)
+        setTimeout(() => loadCategories(finalResults, gen), 0)
+        return
+      }
+
+      // Single-clause with field scope: force NDJSON path with field param
+      const singleClause = parsed.clauses[0]
+      const isWildcard = singleClause.value.includes('*') || query.includes('*')
+      const effectiveQuery = singleClause.value
+      const useParallel = !hasFacilityFilter && !isWildcard && activeFields.size > 0 && effectiveQuery.trim().length > 0 && advActiveCount === 0 && !singleClause.field
+
+      if (parsed.isAdvanced && singleClause.field) {
+        // Field-scoped single clause: use NDJSON path with field param
+        const clauseResults = await fetchClause(singleClause)
+        setResults(clauseResults)
+        setTotal(clauseResults.length)
+        setQueryMs(Math.round(performance.now() - t0))
+        setLastParsedQuery(parsed)
+        setTimeout(() => loadDetails(clauseResults, gen), 0)
+        setTimeout(() => loadCategories(clauseResults, gen), 0)
+        return
+      }
+
+      setLastParsedQuery(parsed)
 
       // Base params shared by both paths
-      const baseParams = new URLSearchParams({ q: query, limit: String(maxResults) })
+      const baseParams = new URLSearchParams({ q: effectiveQuery, limit: String(maxResults) })
       if (hasFacilityFilter) baseParams.set("facilities", selectedFacs.join(","))
       if (!showInactive) baseParams.set("showInactive", "false")
       if (scope.type === 'domain') { baseParams.set('region', scope.region); baseParams.set('environment', scope.env) }
@@ -808,7 +915,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       if (dcExc.length) baseParams.set('advDCExclude', dcExc.join(','))
 
       // For parallel path, classify which fields to actually query based on input format
-      const fieldsToQuery = useParallel ? classifyActiveFields(query, activeFields) : new Set<string>()
+      const fieldsToQuery = useParallel ? classifyActiveFields(effectiveQuery, activeFields) : new Set<string>()
 
       if (useParallel) {
         // ── Parallel path: one request per field, all fired in parallel ──
@@ -1167,9 +1274,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     return keys
   }, [violationFilter, filteredResults, lintPatterns])
 
-  const displayedResults = violatingSemanticKeys
+  const displayedResults = (violatingSemanticKeys
     ? sortedResults.filter(r => violatingSemanticKeys.has(getSemanticKey(r)))
     : sortedResults
+  ).filter(r => !excludedKeys.has(getSemanticKey(r)))
 
   // Filter panel computed values
   const fpFilter = filterPanel
@@ -1330,6 +1438,22 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 </div>
               </div>
 
+              {/* Query pills — shown when advanced syntax is active */}
+              {lastParsedQuery?.isAdvanced && results.length > 0 && (
+                <div className="flex items-center gap-1 px-1 pt-0.5 flex-wrap shrink-0">
+                  <span className="text-[10px] text-[#808080] font-mono">Query:</span>
+                  {lastParsedQuery.clauses.map((c, i) => (
+                    <span key={i} className="flex items-center gap-0.5">
+                      {i > 0 && <span className="text-[10px] text-[#808080] font-mono font-bold px-0.5">OR</span>}
+                      <span className="text-[10px] font-mono bg-[#F0F0F0] border border-[#B0B0B0] px-1.5 py-0.5 rounded-sm">
+                        {c.field ? <><span className="text-[#316AC5] font-bold">{c.field}</span><span className="text-[#808080]">:</span></> : null}
+                        <span className="text-black">&quot;{c.value}&quot;</span>
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {/* Search Bar */}
               <div className="flex items-center gap-2 mt-1 shrink-0 px-1">
                 <span className="text-xs">Search for:</span>
@@ -1365,6 +1489,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 <button
                   onClick={() => handleSearch()}
                   className="h-6 px-4 border border-[#808080] text-black bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] active:border-t-black active:border-l-black flex items-center justify-center text-xs ml-auto shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+                  title="Tip: description:&quot;*half*&quot; OR description:&quot;*1/2*&quot;"
                 >
                   Search
                 </button>
@@ -1406,6 +1531,18 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     </>
                   )
                 })()}
+                {lastParsedQuery?.isAdvanced && displayedResults.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const qName = lastParsedQuery.clauses.map(c => c.value.replace(/\*/g, '').trim()).filter(Boolean).join(' / ')
+                      setSaveCatDialog({ name: qName || 'New Category', color: '#6B7280', saving: false })
+                    }}
+                    className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] whitespace-nowrap"
+                    title="Save search as a Category with rules + exclusions"
+                  >
+                    ⊞ Save as Category…
+                  </button>
+                )}
                 {lintPatterns.length > 0 && (
                   <button
                     onClick={e => {
@@ -1574,6 +1711,18 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                             onClick={() => setViolationFilter(null)}
                             className="text-[#C04000] hover:text-red-600 font-bold leading-none"
                             title="Clear violation filter"
+                          >
+                            ×
+                          </button>
+                        </>
+                      )}
+                      {excludedKeys.size > 0 && (
+                        <>
+                          <span className="text-[#808080]">· excluded {excludedKeys.size}</span>
+                          <button
+                            onClick={() => setExcludedKeys(new Set())}
+                            className="text-[#808080] hover:text-red-600 font-bold leading-none"
+                            title="Clear all exclusions"
                           >
                             ×
                           </button>
@@ -1792,7 +1941,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                               if (tdIdx < 1) return
                               const col = cols[tdIdx - 1]
                               if (!col) return
-                              setCtxMenu({ x: e.clientX, y: e.clientY, text: getCellText(col.id, r), groupId: r.groupId, description: r.description })
+                              setCtxMenu({ x: e.clientX, y: e.clientY, text: getCellText(col.id, r), groupId: r.groupId, description: r.description, semanticKey: getSemanticKey(r) })
                             }}
                             className={`border-b border-[#E0E0E0] cursor-pointer ${
                               isSelected
@@ -2278,6 +2427,106 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 </>
               )}
 
+              {/* Save as Category dialog */}
+              {saveCatDialog && (
+                <>
+                  <div className="fixed inset-0 z-[9998]" onClick={() => setSaveCatDialog(null)} />
+                  <div
+                    className="fixed z-[9999] bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] p-3 min-w-[280px]"
+                    style={{ left: '50%', top: '30%', transform: 'translate(-50%, -50%)' }}
+                    onMouseDown={e => e.stopPropagation()}
+                  >
+                    <div className="bg-[#316AC5] text-white text-[9px] font-mono font-bold px-1.5 py-0.5 -mx-3 -mt-3 mb-3">
+                      Save Search as Category
+                    </div>
+                    <div className="space-y-2 text-xs font-mono">
+                      <div>
+                        <label className="block text-[10px] mb-0.5">Name</label>
+                        <input
+                          autoFocus
+                          value={saveCatDialog.name}
+                          onChange={e => setSaveCatDialog(p => p ? { ...p, name: e.target.value } : p)}
+                          className="w-full border border-[#808080] px-1.5 py-0.5 bg-white text-xs font-mono shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] mb-0.5">Color</label>
+                        <div className="flex gap-1 flex-wrap">
+                          {['#6B7280','#EF4444','#F97316','#EAB308','#22C55E','#3B82F6','#8B5CF6','#EC4899'].map(c => (
+                            <button
+                              key={c}
+                              onClick={() => setSaveCatDialog(p => p ? { ...p, color: c } : p)}
+                              style={{ background: c, outline: saveCatDialog.color === c ? '2px solid #000' : 'none' }}
+                              className="w-5 h-5 rounded-sm border border-black/20"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-[#404040] border border-[#C0C0C0] bg-white p-1.5">
+                        <div className="font-bold mb-0.5">Will create:</div>
+                        {lastParsedQuery?.clauses.map((c, i) => (
+                          <div key={i}>{i + 1}. Rule: {c.field ?? 'all fields'} contains &quot;{c.value.replace(/\*/g, '')}&quot;</div>
+                        ))}
+                        {excludedKeys.size > 0 && (
+                          <div className="mt-0.5 text-[#808080]">{excludedKeys.size} manual exclusion{excludedKeys.size !== 1 ? 's' : ''}</div>
+                        )}
+                      </div>
+                      <div className="flex gap-2 justify-end pt-1">
+                        <button
+                          onClick={() => setSaveCatDialog(null)}
+                          className="px-3 py-0.5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] text-xs"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          disabled={saveCatDialog.saving || !saveCatDialog.name.trim()}
+                          onClick={async () => {
+                            if (!lastParsedQuery) return
+                            setSaveCatDialog(p => p ? { ...p, saving: true } : p)
+                            try {
+                              // 1. Create category
+                              const catRes = await fetch('/api/categories', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ name: saveCatDialog.name.trim(), description: '', color: saveCatDialog.color }),
+                              })
+                              const { category } = await catRes.json() as { category: { id: string } }
+                              const catId = category.id
+                              // 2. Create one rule per clause
+                              for (const clause of lastParsedQuery.clauses) {
+                                const field = clause.field ?? 'description'
+                                const value = clause.value.replace(/\*/g, '').trim()
+                                if (!value) continue
+                                await fetch(`/api/categories/${catId}/rules`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ field, operator: 'contains', value }),
+                                })
+                              }
+                              // 3. Add exclusions
+                              for (const semKey of excludedKeys) {
+                                const result = displayedResults.find(r => getSemanticKey(r) === semKey) ??
+                                               sortedResults.find(r => getSemanticKey(r) === semKey)
+                                if (!result) continue
+                                await fetch(`/api/categories/${catId}/exclusions`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ groupId: result.groupId, drugDescription: result.description }),
+                                })
+                              }
+                              setSaveCatDialog(null)
+                            } catch { setSaveCatDialog(p => p ? { ...p, saving: false } : p) }
+                          }}
+                          className="px-3 py-0.5 border border-[#316AC5] bg-[#316AC5] text-white hover:bg-[#1a4a9a] text-xs disabled:opacity-50"
+                        >
+                          {saveCatDialog.saving ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
               {/* Context menu */}
               {ctxMenu && (
                 <>
@@ -2295,6 +2544,19 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                       Copy
                     </button>
                     <div className="border-t border-[#C0C0C0] my-0.5" />
+                    {ctxMenu?.semanticKey && (
+                      <button
+                        className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap"
+                        onClick={() => {
+                          if (ctxMenu.semanticKey) {
+                            setExcludedKeys(prev => new Set([...prev, ctxMenu.semanticKey!]))
+                          }
+                          setCtxMenu(null)
+                        }}
+                      >
+                        ✕ Exclude from results
+                      </button>
+                    )}
                     <button
                       className="w-full text-left px-4 py-0.5 hover:bg-[#316AC5] hover:text-white whitespace-nowrap"
                       onClick={() => {

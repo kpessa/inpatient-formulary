@@ -356,6 +356,17 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
     fetchCategories()
   }
 
+  const removeExclusion = async (groupId: string) => {
+    if (!selectedId) return
+    await fetch(`/api/categories/${selectedId}/exclusions`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId }),
+    })
+    setMembers(prev => prev.filter(m => !(m.groupId === groupId && m.source === 'excluded')))
+    fetchCategories()
+  }
+
   const selectedCat = categories.find(c => c.id === selectedId)
 
   // ── Filter Groups state ──────────────────────────────────────────────────
@@ -975,6 +986,8 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
                               <td className="px-1.5 py-0.5 whitespace-nowrap">
                                 {m.source === 'manual' ? (
                                   <span className="bg-[#316AC5] text-white px-1 py-[1px] rounded-sm text-[9px]">manual</span>
+                                ) : m.source === 'excluded' ? (
+                                  <span className="bg-[#808080] text-white px-1 py-[1px] rounded-sm text-[9px]">excluded</span>
                                 ) : (
                                   <span className="bg-[#22C55E] text-white px-1 py-[1px] rounded-sm text-[9px]">rule</span>
                                 )}
@@ -986,6 +999,14 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
                                     className="text-[9px] text-[#CC0000] hover:underline"
                                   >
                                     ✕ Remove
+                                  </button>
+                                )}
+                                {m.source === 'excluded' && (
+                                  <button
+                                    onClick={() => removeExclusion(m.groupId)}
+                                    className="text-[9px] text-[#316AC5] hover:underline"
+                                  >
+                                    ↩ Un-exclude
                                   </button>
                                 )}
                               </td>

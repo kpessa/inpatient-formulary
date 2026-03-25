@@ -319,14 +319,20 @@ export interface CategoryRule {
   id: string
   categoryId: string
   field: 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'status' | 'strength'
-  operator: 'equals' | 'contains' | 'starts_with' | 'ends_with'
+        | 'description' | 'genericName' | 'mnemonic' | 'brandName'
+  operator: 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'matches_regex'
   value: string
+}
+
+export interface CategoryExclusion {
+  groupId: string
+  drugDescription: string
 }
 
 export interface CategoryMember {
   groupId: string
   drugDescription: string
-  source: 'manual' | 'rule'
+  source: 'manual' | 'rule' | 'excluded'
   ruleId?: string   // which rule matched, if source === 'rule'
 }
 

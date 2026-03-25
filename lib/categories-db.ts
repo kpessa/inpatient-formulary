@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { getDb } from './db'
-import type { DrugCategory, CategoryRule, CategoryMember } from './types'
+import type { DrugCategory, CategoryRule, CategoryMember, CategoryExclusion } from './types'
 import type { Row } from '@libsql/client'
 import { tcDescendants } from './therapeutic-class-map'
 
@@ -33,6 +33,10 @@ function fieldToSqlExpression(field: string): string {
     case 'dosageForm':       return 'dosage_form'
     case 'status':           return 'status'
     case 'strength':         return 'strength'
+    case 'description':      return 'description'
+    case 'genericName':      return 'generic_name'
+    case 'mnemonic':         return 'mnemonic'
+    case 'brandName':        return 'brand_name'
     default:                 return 'NULL'
   }
 }
@@ -44,11 +48,16 @@ function matchesRuleValue(field: string, operator: string, value: string, rawVal
     return codes.includes(rawVal)
   }
   switch (operator) {
-    case 'equals':      return rawVal === value
-    case 'contains':    return rawVal.toLowerCase().includes(value.toLowerCase())
-    case 'starts_with': return rawVal.toLowerCase().startsWith(value.toLowerCase())
-    case 'ends_with':   return rawVal.toLowerCase().endsWith(value.toLowerCase())
-    default:            return rawVal === value
+    case 'equals':         return rawVal === value
+    case 'contains':       return rawVal.toLowerCase().includes(value.toLowerCase())
+    case 'starts_with':    return rawVal.toLowerCase().startsWith(value.toLowerCase())
+    case 'ends_with':      return rawVal.toLowerCase().endsWith(value.toLowerCase())
+    case 'matches_regex': {
+      // value is a wildcard pattern using * (converted to regex for in-memory matching)
+      const regexStr = value.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+      try { return new RegExp(regexStr, 'i').test(rawVal) } catch { return false }
+    }
+    default:               return rawVal === value
   }
 }
 
@@ -63,11 +72,16 @@ function buildRuleClause(
     return { clause: `IN (${codes.map(() => '?').join(',')})`, args: codes }
   }
   switch (operator) {
-    case 'equals':      return { clause: '= ?',    args: [value] }
-    case 'contains':    return { clause: 'LIKE ?',  args: [`%${value}%`] }
-    case 'starts_with': return { clause: 'LIKE ?',  args: [`${value}%`] }
-    case 'ends_with':   return { clause: 'LIKE ?',  args: [`%${value}`] }
-    default:            return { clause: '= ?',     args: [value] }
+    case 'equals':         return { clause: '= ?',    args: [value] }
+    case 'contains':       return { clause: 'LIKE ?',  args: [`%${value}%`] }
+    case 'starts_with':    return { clause: 'LIKE ?',  args: [`${value}%`] }
+    case 'ends_with':      return { clause: 'LIKE ?',  args: [`%${value}`] }
+    case 'matches_regex': {
+      // value uses * wildcards → translate to SQL LIKE %
+      const likeVal = value.replace(/[%_]/g, c => `\\${c}`).replace(/\*/g, '%')
+      return { clause: 'LIKE ?', args: [likeVal] }
+    }
+    default:               return { clause: '= ?',     args: [value] }
   }
 }
 
@@ -168,19 +182,51 @@ export async function removeManualMember(categoryId: string, groupId: string): P
   })
 }
 
+// ---------------------------------------------------------------------------
+// Exclusions
+// ---------------------------------------------------------------------------
+
+export async function listExclusions(categoryId: string): Promise<CategoryExclusion[]> {
+  const db = getDb()
+  const { rows } = await db.execute({
+    sql: 'SELECT group_id, drug_description FROM category_exclusions WHERE category_id = ? ORDER BY added_at',
+    args: [categoryId],
+  })
+  return rows.map(r => ({ groupId: r.group_id as string, drugDescription: (r.drug_description as string | null) ?? '' }))
+}
+
+export async function addExclusion(categoryId: string, groupId: string, drugDescription: string): Promise<void> {
+  const db = getDb()
+  await db.execute({
+    sql: 'INSERT OR REPLACE INTO category_exclusions (category_id, group_id, drug_description) VALUES (?, ?, ?)',
+    args: [categoryId, groupId, drugDescription],
+  })
+}
+
+export async function removeExclusion(categoryId: string, groupId: string): Promise<void> {
+  const db = getDb()
+  await db.execute({
+    sql: 'DELETE FROM category_exclusions WHERE category_id = ? AND group_id = ?',
+    args: [categoryId, groupId],
+  })
+}
+
 export async function resolveCategoryMembers(categoryId: string): Promise<CategoryMember[]> {
   const db = getDb()
 
-  const [{ rows: manualRows }, { rows: ruleRows }] = await db.batch([
+  const [{ rows: manualRows }, { rows: ruleRows }, { rows: exclusionRows }] = await db.batch([
     { sql: 'SELECT group_id, drug_description FROM category_members WHERE category_id = ?', args: [categoryId] },
     { sql: 'SELECT * FROM category_rules WHERE category_id = ?', args: [categoryId] },
+    { sql: 'SELECT group_id, drug_description FROM category_exclusions WHERE category_id = ?', args: [categoryId] },
   ], 'read')
 
+  const exclusionSet = new Set(exclusionRows.map(r => r.group_id as string))
   const seen = new Set<string>()
   const results: CategoryMember[] = []
 
   for (const r of manualRows) {
     const groupId = r.group_id as string
+    if (exclusionSet.has(groupId)) continue  // manual member overridden by explicit exclusion
     seen.add(groupId)
     results.push({ groupId, drugDescription: (r.drug_description as string | null) ?? '', source: 'manual' })
   }
@@ -196,11 +242,15 @@ export async function resolveCategoryMembers(categoryId: string): Promise<Catego
     })
     for (const r of rows) {
       const groupId = r.group_id as string
-      if (!seen.has(groupId)) {
-        seen.add(groupId)
-        results.push({ groupId, drugDescription: r.description as string, source: 'rule', ruleId })
-      }
+      if (seen.has(groupId) || exclusionSet.has(groupId)) continue
+      seen.add(groupId)
+      results.push({ groupId, drugDescription: r.description as string, source: 'rule', ruleId })
     }
+  }
+
+  // Append exclusions at the end for display in CategoryManager
+  for (const r of exclusionRows) {
+    results.push({ groupId: r.group_id as string, drugDescription: (r.drug_description as string | null) ?? '', source: 'excluded' })
   }
 
   return results

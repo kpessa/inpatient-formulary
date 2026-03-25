@@ -25,6 +25,8 @@ export async function GET(req: NextRequest) {
 
   const fieldsParam = searchParams.get('fields')
   const fields = fieldsParam?.split(',').filter(Boolean) as FieldSearchParams['field'][] | undefined
+  // Single-field scoping for advanced query syntax (e.g. description:"*half*")
+  const fieldParam = searchParams.get('field') ?? undefined
 
   // Parse advanced filters
   const advancedFilters: AdvancedFilters = {}
@@ -91,6 +93,7 @@ export async function GET(req: NextRequest) {
           facilities: facilitiesParam,
           colFilters: Object.keys(colFilters).length > 0 ? colFilters : undefined,
           advancedFilters: hasAdvanced ? advancedFilters : undefined,
+          field: fieldParam,
           onCount: (count) => {
             controller.enqueue(encoder.encode(JSON.stringify({ total: count }) + '\n'))
           },

@@ -167,6 +167,15 @@ CREATE INDEX IF NOT EXISTS idx_mn_ndc ON multum_ndcs(ndc_formatted);
 -- CREATE INDEX IF NOT EXISTS idx_fg_therapeutic_class ON formulary_groups(therapeutic_class);
 -- (scripts/migrate_therapeutic_class.ts)
 
+-- Manual exclusions: drugs explicitly removed from a category even if they match rules
+CREATE TABLE IF NOT EXISTS category_exclusions (
+  category_id      TEXT NOT NULL REFERENCES drug_categories(id) ON DELETE CASCADE,
+  group_id         TEXT NOT NULL,
+  drug_description TEXT NOT NULL DEFAULT '',
+  added_at         TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (category_id, group_id)
+);
+
 -- Design Patterns / Linter
 CREATE TABLE IF NOT EXISTS design_patterns (
   id          TEXT PRIMARY KEY,

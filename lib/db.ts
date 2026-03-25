@@ -68,6 +68,8 @@ export interface SearchParams {
   facilities?: string | null
   colFilters?: Record<string, { text?: string; vals?: string[] }>
   advancedFilters?: AdvancedFilters
+  /** Restrict text search to a single DB column (e.g. 'description') instead of all 8 fields */
+  field?: string
 }
 
 // Maps SearchModal column IDs to their DB column names for server-side filtering.
@@ -120,6 +122,20 @@ function buildAdvancedClauses(
   }
 }
 
+// Maps field alias → DB column name for single-field search scoping
+const FIELD_DB_COL: Record<string, string> = {
+  description: 'description',
+  generic:     'generic_name',
+  genericName: 'generic_name',
+  mnemonic:    'mnemonic',
+  brand:       'brand_name',
+  brandName:   'brand_name',
+  charge:      'charge_number',
+  chargeNumber:'charge_number',
+  pyxis:       'pyxis_id',
+  pyxisId:     'pyxis_id',
+}
+
 export async function searchFormulary({
   q,
   limit,
@@ -129,6 +145,7 @@ export async function searchFormulary({
   facilities,
   colFilters,
   advancedFilters,
+  field,
   onCount,
 }: SearchParams & { onCount?: (n: number) => void }): Promise<{ results: SearchResult[]; total: number }> {
   const db = getDb()
@@ -178,24 +195,20 @@ export async function searchFormulary({
 
   if (q) {
     const isWildcard = q.includes('*')
-    if (isWildcard) {
-      // Translate * to SQL LIKE wildcard %
-      const likeQ = q.replace(/\*/g, '%')
+    const likeQ = isWildcard ? q.replace(/\*/g, '%') : `${q}%`
+    const scopedCol = field ? FIELD_DB_COL[field] : null
+    if (scopedCol) {
+      // Single-field scoped search
+      conditions.push(`${scopedCol} LIKE ?`)
+      sqlArgs.push(likeQ)
+    } else {
+      // All-field search (default)
       conditions.push(
         '(description LIKE ? OR generic_name LIKE ? OR mnemonic LIKE ? OR ' +
         'charge_number LIKE ? OR brand_name LIKE ? OR brand_name2 LIKE ? OR ' +
         'brand_name3 LIKE ? OR pyxis_id LIKE ?)'
       )
       for (let i = 0; i < 8; i++) sqlArgs.push(likeQ)
-    } else {
-      // Prefix match
-      const sub = `${q}%`
-      conditions.push(
-        '(description LIKE ? OR generic_name LIKE ? OR mnemonic LIKE ? OR ' +
-        'charge_number LIKE ? OR brand_name LIKE ? OR brand_name2 LIKE ? OR ' +
-        'brand_name3 LIKE ? OR pyxis_id LIKE ?)'
-      )
-      for (let i = 0; i < 8; i++) sqlArgs.push(sub)
     }
   }
 
