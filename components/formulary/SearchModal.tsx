@@ -464,19 +464,20 @@ function TokenSearchInput({
           <span
             key={i}
             style={{ background: pill.negated ? '#CC0000' : '#316AC5', color: 'white' }}
-            className="flex items-center text-[11px] px-1 py-px gap-0.5 shrink-0 cursor-pointer"
+            className="flex items-center text-[11px] px-1 py-px gap-0.5 max-w-[50%] cursor-pointer"
             onClick={e => { e.stopPropagation(); setActivePillIdx(i) }}
+            title={`${pill.negated ? 'NOT ' : ''}${pill.label}: ${pill.value}`}
           >
-            {pill.negated && <span className="font-bold text-[#FFAAAA]">NOT</span>}
+            {pill.negated && <span className="font-bold text-[#FFAAAA] shrink-0">NOT</span>}
             <span
-              className="font-bold hover:underline"
+              className="font-bold hover:underline shrink-0"
               onClick={e => { e.stopPropagation(); togglePillNegated(i) }}
               title={pill.negated ? 'Remove NOT' : 'Add NOT'}
             >{pill.label}:</span>
-            <span>{pill.value || '…'}</span>
+            <span className="truncate">{pill.value || '…'}</span>
             <button
               onMouseDown={e => { e.preventDefault(); e.stopPropagation(); removePill(i) }}
-              className="ml-0.5 opacity-70 hover:opacity-100 leading-none text-white"
+              className="ml-0.5 opacity-70 hover:opacity-100 leading-none text-white shrink-0"
               tabIndex={-1}
             >×</button>
           </span>
@@ -1922,80 +1923,6 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
           {/* ── MAIN TAB ─────────────────────────────────────────── */}
           {activeTab === "main" && (
             <>
-              {/* Top Section: Group Boxes */}
-              <div className="flex flex-col gap-2 shrink-0">
-                {/* Identifiers */}
-                <fieldset className="border border-gray-300 p-2 pt-3 relative">
-                  <legend className="absolute -top-2 left-2 px-1 bg-[#F0F0F0] text-xs">Identifiers</legend>
-                  <div className="flex flex-wrap gap-x-4 gap-y-2">
-                    {IDENTIFIER_FIELDS.map(({ label, field }) => {
-                      const fs = field ? fieldStatus[field] : undefined
-                      return (
-                        <label
-                          key={label}
-                          className={`flex items-center gap-1 ${field ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
-                        >
-                          <Checkbox
-                            checked={field ? activeFields.has(field) : false}
-                            disabled={!field}
-                            onCheckedChange={field ? (checked) => {
-                              setActiveFields(prev => {
-                                const next = new Set(prev)
-                                if (checked) next.add(field)
-                                else next.delete(field)
-                                return next
-                              })
-                            } : undefined}
-                            className="h-3 w-3 rounded-none border-[#808080] bg-white outline-none ring-0 shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]"
-                          />
-                          <span>{label}</span>
-                          {fs?.state === 'loading' && (
-                            <span className="text-[10px] text-[#808080] animate-pulse">…</span>
-                          )}
-                          {fs?.state === 'done' && (
-                            <span className="text-[10px] text-[#808080]">
-                              {fs.count >= fs.limit ? `${fs.count}+` : fs.count} · {fs.ms}ms
-                            </span>
-                          )}
-                        </label>
-                      )
-                    })}
-                  </div>
-                </fieldset>
-
-                <div className="flex gap-2">
-                  {/* Product Type */}
-                  <fieldset className="border border-gray-300 p-2 pt-3 relative flex-1">
-                    <legend className="absolute -top-2 left-2 px-1 bg-[#F0F0F0] text-xs">Product Type</legend>
-                    <div className="flex gap-x-4 gap-y-1 flex-wrap">
-                      {["Product", "IV Set", "Compound"].map(label => (
-                        <label key={label} className="flex items-center gap-1 cursor-pointer">
-                          <Checkbox defaultChecked className="h-3 w-3 rounded-none border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
-                          <span>{label}</span>
-                        </label>
-                      ))}
-                      <label className="flex items-center gap-1 cursor-pointer">
-                        <Checkbox className="h-3 w-3 rounded-none border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
-                        <span>Order Set</span>
-                      </label>
-                    </div>
-                  </fieldset>
-
-                  {/* Order Type */}
-                  <fieldset className="border border-gray-300 p-2 pt-3 relative flex-1">
-                    <legend className="absolute -top-2 left-2 px-1 bg-[#F0F0F0] text-xs">Order Type</legend>
-                    <div className="flex gap-x-4 gap-y-1 flex-wrap">
-                      {["Medication", "Intermittent", "Continuous"].map(label => (
-                        <label key={label} className="flex items-center gap-1 cursor-pointer">
-                          <Checkbox defaultChecked className="h-3 w-3 rounded-none border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
-                          <span>{label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </fieldset>
-                </div>
-              </div>
-
               {/* Visual Query Builder — shown when query has tokens */}
               {queryState && queryState.tokens.length > 0 && (
                 <div className="shrink-0 border border-[#D0D0D0] bg-[#FAFAFA] mx-1 mt-0.5">
@@ -2030,15 +1957,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 </div>
               )}
 
-              {/* Search Bar */}
-              <div className="flex items-center gap-2 mt-1 shrink-0 px-1">
-                <span className="text-xs">Search for:</span>
-                <div className="flex items-center">
+              {/* Search Bar — Row 1 */}
+              <div className="flex items-center gap-1 mt-1 shrink-0 px-1">
+                <span className="text-xs shrink-0">Search for:</span>
+                <div className="flex items-center flex-1 min-w-0">
                   <TokenSearchInput
                     value={inputValue}
                     onChange={s => { setInputValue(s); setSearchValue(s); setQueryState(parseQueryToState(s, FIELD_ALIASES, ALL_CATALOG_FIELDS)) }}
                     onSearch={s => { setInputValue(''); handleSearch(s) }}
-                    inputClassName="w-64 text-xs font-sans rounded-none border"
+                    inputClassName="flex-1 text-xs font-sans rounded-none border"
                   />
                   <button
                     onClick={() => { setSearchValue(''); setInputValue(''); setQueryState(null) }}
@@ -2078,6 +2005,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     <span className="bg-[#316AC5] text-white text-[9px] px-1 py-px rounded-full">{advActiveCount}</span>
                   )}
                 </button>
+              </div>
+
+              {/* Action buttons — Row 2 */}
+              <div className="flex items-center gap-1 px-1 shrink-0 flex-wrap">
                 <label className="flex items-center gap-1 text-xs cursor-pointer select-none whitespace-nowrap">
                   <input
                     type="checkbox"
@@ -2087,21 +2018,13 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   />
                   Unified
                 </label>
-                {(() => {
-                  const selectedRow = selectedResultIdx !== null ? displayedResults[selectedResultIdx] : null
-                  const domainCount = selectedRow ? (variantsByGroup.get(getSemanticKey(selectedRow))?.length ?? 0) : 0
-                  return (
-                    <>
-                      <button
-                        onClick={() => cols.forEach((col, i) => { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(i) })}
-                        className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
-                        title="Fit all columns to content"
-                      >
-                        Autofit
-                      </button>
-                    </>
-                  )
-                })()}
+                <button
+                  onClick={() => cols.forEach((col, i) => { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(i) })}
+                  className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+                  title="Fit all columns to content"
+                >
+                  Autofit
+                </button>
                 {(lastParsedQuery?.isAdvanced || categoryFilter || advActiveCount > 0) && (
                   <>
                     <button
