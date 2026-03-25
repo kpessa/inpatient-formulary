@@ -141,6 +141,19 @@ CREATE TABLE IF NOT EXISTS search_filter_groups (
   created_at  TEXT DEFAULT (datetime('now'))
 );
 
+-- Multum NDC cost/package reference data (loaded via scripts/load_multum_ndcs.ts)
+CREATE TABLE IF NOT EXISTS multum_ndcs (
+  ndc_formatted  TEXT PRIMARY KEY,
+  a_cost         REAL,
+  awp            REAL,
+  inner_pkg_size REAL,
+  inner_pkg_code TEXT,
+  outer_pkg_size REAL,
+  unit_dose_code TEXT,
+  gbo            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mn_ndc ON multum_ndcs(ndc_formatted);
+
 -- Denormalized columns extracted from JSON blobs (added via migration scripts)
 -- ALTER TABLE formulary_groups ADD COLUMN route TEXT NOT NULL DEFAULT '';
 -- ALTER TABLE formulary_groups ADD COLUMN dispense_category TEXT NOT NULL DEFAULT '';

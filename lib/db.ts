@@ -876,3 +876,114 @@ export async function createNonReferenceItem(
   await db.batch(stmts, 'write')
   return { groupId }
 }
+
+// ---------------------------------------------------------------------------
+// NDC Lookup for Non-Reference Build Pre-population
+// ---------------------------------------------------------------------------
+
+export interface NdcLookupResult {
+  source: 'formulary' | 'multum_csv'
+  description: string
+  genericName: string
+  strength: string
+  strengthUnit: string
+  dosageForm: string
+  mnemonic: string
+  brandName: string
+  manufacturer: string
+  awpCost: number | null
+  cost1: number | null
+  packageSize: number | null
+  packageUnit: string
+  outerPackageSize: number | null
+  isUnitDose: boolean
+  isBrand: boolean
+}
+
+export async function lookupNdcForBuild(ndc: string): Promise<NdcLookupResult | null> {
+  if (!ndc.trim()) return null
+  const db = getDb()
+
+  // Phase A: look up in existing formulary (supply_records JOIN formulary_groups)
+  const { rows: fRows } = await db.execute({
+    sql: `SELECT fg.description, fg.generic_name, fg.strength, fg.strength_unit,
+                 fg.dosage_form, fg.mnemonic, fg.brand_name,
+                 sr.manufacturer, sr.awp_cost, sr.cost1, sr.is_brand, sr.is_unit_dose,
+                 fg.dispense_json
+          FROM supply_records sr
+          JOIN formulary_groups fg
+            ON fg.group_id = sr.group_id AND fg.domain = sr.domain
+          WHERE sr.ndc = ?
+          LIMIT 1`,
+    args: [ndc.trim()],
+  })
+
+  if (fRows.length > 0) {
+    const r = fRows[0]
+    let packageSize: number | null = null
+    let packageUnit = ''
+    let outerPackageSize: number | null = null
+    try {
+      const disp = JSON.parse((r.dispense_json as string) || '{}') as {
+        packageSize?: number | null
+        packageUnit?: string
+        outerPackageSize?: number | null
+      }
+      packageSize = disp.packageSize ?? null
+      packageUnit = disp.packageUnit ?? ''
+      outerPackageSize = disp.outerPackageSize ?? null
+    } catch { /* ignore */ }
+    return {
+      source: 'formulary',
+      description:   (r.description as string) ?? '',
+      genericName:   (r.generic_name as string) ?? '',
+      strength:      (r.strength as string) ?? '',
+      strengthUnit:  (r.strength_unit as string) ?? '',
+      dosageForm:    (r.dosage_form as string) ?? '',
+      mnemonic:      (r.mnemonic as string) ?? '',
+      brandName:     (r.brand_name as string) ?? '',
+      manufacturer:  (r.manufacturer as string) ?? '',
+      awpCost:       (r.awp_cost as number | null),
+      cost1:         (r.cost1 as number | null),
+      packageSize,
+      packageUnit,
+      outerPackageSize,
+      isUnitDose:    !!(r.is_unit_dose as number),
+      isBrand:       !!(r.is_brand as number),
+    }
+  }
+
+  // Phase B: fall back to Multum NDC CSV table
+  try {
+    const { rows: mRows } = await db.execute({
+      sql: `SELECT awp, a_cost, inner_pkg_size, outer_pkg_size, unit_dose_code, gbo
+            FROM multum_ndcs WHERE ndc_formatted = ?`,
+      args: [ndc.trim()],
+    })
+    if (mRows.length > 0) {
+      const m = mRows[0]
+      return {
+        source:        'multum_csv',
+        description:   '',
+        genericName:   '',
+        strength:      '',
+        strengthUnit:  '',
+        dosageForm:    '',
+        mnemonic:      '',
+        brandName:     '',
+        manufacturer:  '',
+        awpCost:       (m.awp as number | null),
+        cost1:         (m.a_cost as number | null),
+        packageSize:   (m.inner_pkg_size as number | null),
+        packageUnit:   '',
+        outerPackageSize: (m.outer_pkg_size as number | null) || null,
+        isUnitDose:    (m.unit_dose_code as string) === 'Y',
+        isBrand:       (m.gbo as string) === 'B',
+      }
+    }
+  } catch {
+    // multum_ndcs table doesn't exist yet — just return null
+  }
+
+  return null
+}

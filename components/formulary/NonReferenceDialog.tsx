@@ -5,7 +5,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   Dialog, DialogPortal, DialogOverlay, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
-import type { NonReferenceFields } from '@/lib/db'
+import type { NonReferenceFields, NdcLookupResult } from '@/lib/db'
 
 interface Props {
   availableDomains: { region: string; env: string; domain: string }[]
@@ -20,14 +20,30 @@ const DOSAGE_FORMS = [
   'SUPPOSITORY', 'INFUSION', 'CONCENTRATE', 'GRANULES', 'SYRUP', 'ELIXIR',
 ]
 
+// Digits, hyphens, plus optional trailing alpha suffix (e.g. "12345-0123-01A")
 function isValidNdc(ndc: string) {
-  return /^[\d-]+$/.test(ndc.trim()) && ndc.trim().length >= 9
+  return /^[\d-]+[A-Za-z]*$/.test(ndc.trim()) && ndc.trim().length >= 9
+}
+
+function halveStrength(s: string): string {
+  const m = s.match(/^([\d.]+)(.*)$/)
+  if (!m) return s
+  const half = parseFloat(m[1]) / 2
+  const formatted = half % 1 === 0 ? String(half) : half.toFixed(2)
+  return `${formatted}${m[2]}`
 }
 
 export function NonReferenceDialog({ availableDomains, onClose, onCreated }: Props) {
   const [step, setStep] = useState<1 | 2>(1)
   const [ndc, setNdc] = useState('')
   const [ndcError, setNdcError] = useState('')
+
+  // Step 1 lookup state
+  const [lookupLoading, setLookupLoading] = useState(false)
+  const [lookupResult, setLookupResult] = useState<NdcLookupResult | null>(null)
+  const [lookupSearched, setLookupSearched] = useState(false)
+  const [halfTab, setHalfTab] = useState(false)
+  const [doPrePopulate, setDoPrePopulate] = useState(true)
 
   // Form fields
   const [manufacturer, setManufacturer] = useState('')
@@ -54,10 +70,62 @@ export function NonReferenceDialog({ availableDomains, onClose, onCreated }: Pro
 
   const prodDomains = availableDomains.filter(d => d.env === 'prod')
 
-  const handleContinue = () => {
-    if (!ndc.trim()) { setNdcError('NDC is required'); return }
-    if (!isValidNdc(ndc)) { setNdcError('Enter a valid NDC (e.g. 12345-0123-01)'); return }
+  // Detect alpha suffix and extract base NDC
+  const ndcTrimmed = ndc.trim()
+  const alphaMatch = ndcTrimmed.match(/^([\d-]+)([A-Za-z]+)$/)
+  const hasAlpha = !!alphaMatch
+  const baseNdc = hasAlpha ? alphaMatch![1] : ndcTrimmed
+
+  const handleContinue = async () => {
+    if (!ndcTrimmed) { setNdcError('NDC is required'); return }
+    if (!isValidNdc(ndcTrimmed)) { setNdcError('Enter a valid NDC (digits, hyphens, optional letter suffix)'); return }
     setNdcError('')
+
+    if (hasAlpha && baseNdc) {
+      setLookupLoading(true)
+      setLookupSearched(false)
+      try {
+        const res = await fetch(`/api/formulary/ndc-lookup?ndc=${encodeURIComponent(baseNdc)}`)
+        const data = await res.json() as { result: NdcLookupResult | null }
+        setLookupResult(data.result ?? null)
+        setDoPrePopulate(!!data.result)
+        setHalfTab(!!data.result)
+      } finally {
+        setLookupLoading(false)
+        setLookupSearched(true)
+      }
+      // Stay on Step 1 to show the result panel
+    } else {
+      setStep(2)
+    }
+  }
+
+  const handlePopulateAndAdvance = () => {
+    if (lookupResult && doPrePopulate) {
+      const half = halfTab
+      const fromFormulary = lookupResult.source === 'formulary'
+      if (fromFormulary) {
+        setDescription(lookupResult.description + (half ? ' HALF' : ''))
+        setGenericName(lookupResult.genericName)
+        setBrandName(lookupResult.brandName)
+        setMnemonic(lookupResult.mnemonic + (half ? 'H' : ''))
+        setStrength(half ? halveStrength(lookupResult.strength) : lookupResult.strength)
+        setDosageForm(lookupResult.dosageForm)
+        setManufacturer(lookupResult.manufacturer)
+        setIsUnitDose(lookupResult.isUnitDose)
+        setIsBrand(lookupResult.isBrand)
+        setPackageSize(lookupResult.packageSize != null ? String(lookupResult.packageSize) : '')
+        setPackageUnit(lookupResult.packageUnit)
+        setOuterPackageSize(lookupResult.outerPackageSize != null ? String(lookupResult.outerPackageSize) : '')
+      }
+      if (lookupResult.awpCost != null) {
+        const val = half ? +(lookupResult.awpCost / 2).toFixed(4) : lookupResult.awpCost
+        setAwpCost(String(val))
+      }
+      if (!fromFormulary && lookupResult.packageSize != null) {
+        setPackageSize(String(lookupResult.packageSize))
+      }
+    }
     setStep(2)
   }
 
@@ -70,7 +138,7 @@ export function NonReferenceDialog({ availableDomains, onClose, onCreated }: Pro
     setError('')
     try {
       const fields: NonReferenceFields = {
-        ndc: ndc.trim(),
+        ndc: ndcTrimmed,
         manufacturer: manufacturer.trim(),
         genericName: genericName.trim(),
         mnemonic: mnemonic.trim(),
@@ -91,11 +159,7 @@ export function NonReferenceDialog({ availableDomains, onClose, onCreated }: Pro
       }
       const domains = prodDomains.map(d => {
         const idx = d.domain.lastIndexOf('_')
-        return {
-          region: d.domain.slice(0, idx),
-          environment: d.domain.slice(idx + 1),
-          domain: d.domain,
-        }
+        return { region: d.domain.slice(0, idx), environment: d.domain.slice(idx + 1), domain: d.domain }
       })
 
       const res = await fetch('/api/formulary/non-reference', {
@@ -106,7 +170,6 @@ export function NonReferenceDialog({ availableDomains, onClose, onCreated }: Pro
       const data = await res.json() as { groupId?: string; error?: string }
       if (!res.ok || !data.groupId) throw new Error(data.error ?? 'Failed to create item')
 
-      // Auto-create a ProductBuild entry for tracking
       await fetch('/api/builds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,30 +209,86 @@ export function NonReferenceDialog({ availableDomains, onClose, onCreated }: Pro
           </DialogHeader>
 
           {step === 1 ? (
-            /* Step 1: NDC Entry */
             <div className="p-4 space-y-3">
               <div className="text-[11px] font-mono text-[#404040]">
-                Enter the NDC for the new non-reference item.
+                Enter the NDC for the new non-reference item. Add a letter suffix (e.g. <span className="font-bold">01A</span>) for a derived dummy NDC.
               </div>
               <div>
                 <div className={labelClass}>{reqMark} NDC</div>
                 <input
                   autoFocus
                   className={inputClass}
-                  placeholder="e.g. 12345-0123-01"
+                  placeholder="e.g. 12345-0123-01A"
                   value={ndc}
-                  onChange={e => { setNdc(e.target.value); setNdcError('') }}
+                  onChange={e => { setNdc(e.target.value); setNdcError(''); setLookupSearched(false); setLookupResult(null) }}
                   onKeyDown={e => e.key === 'Enter' && handleContinue()}
                 />
                 {ndcError && <div className="text-[10px] text-[#CC0000] mt-0.5">{ndcError}</div>}
+                {hasAlpha && (
+                  <div className="text-[9px] font-mono text-[#316AC5] mt-0.5">
+                    Alpha suffix detected — will look up base NDC <span className="font-bold">{baseNdc}</span>
+                  </div>
+                )}
               </div>
+
+              {/* Lookup result panel */}
+              {lookupLoading && (
+                <div className="border border-[#808080] bg-white px-2 py-1.5 text-[10px] font-mono text-[#606060]">
+                  Looking up {baseNdc}…
+                </div>
+              )}
+
+              {lookupSearched && !lookupLoading && (
+                <div className="border border-[#808080] bg-white px-2 py-1.5 space-y-1.5">
+                  {lookupResult ? (
+                    <>
+                      <div className="flex items-start gap-1.5">
+                        <span className="text-[#2E7D32] text-[11px]">✓</span>
+                        <div>
+                          <div className="text-[10px] font-mono font-bold text-black">
+                            {lookupResult.source === 'formulary'
+                              ? lookupResult.description || baseNdc
+                              : `Multum: AWP=$${lookupResult.awpCost ?? '?'} · ${lookupResult.packageSize ?? '?'} units`}
+                          </div>
+                          <div className="text-[9px] font-mono text-[#606060]">
+                            Source: {lookupResult.source === 'formulary' ? 'existing formulary' : 'Multum NDC database'}
+                            {lookupResult.source === 'formulary' && lookupResult.strength
+                              ? ` · ${lookupResult.strength} ${lookupResult.strengthUnit}`.trim()
+                              : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-1.5 text-[10px] font-mono cursor-pointer">
+                        <input type="checkbox" checked={doPrePopulate} onChange={e => setDoPrePopulate(e.target.checked)} className="w-3 h-3" />
+                        Pre-populate form from {lookupResult.source === 'formulary' ? 'this drug' : 'Multum data'}
+                      </label>
+                      <label className="flex items-center gap-1.5 text-[10px] font-mono cursor-pointer">
+                        <input type="checkbox" checked={halfTab} onChange={e => setHalfTab(e.target.checked)} className="w-3 h-3" />
+                        Half-tab: halve AWP{lookupResult.source === 'formulary' ? ' & strength' : ''} (÷2)
+                      </label>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-[10px] font-mono text-[#606060]">
+                      <span>ⓘ</span>
+                      <span>NDC <span className="font-bold">{baseNdc}</span> not found — enter details manually.</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <DialogFooter className="flex flex-row gap-2 justify-end pt-1">
                 <button onClick={onClose} className="text-[11px] font-mono px-3 py-1 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]">
                   Cancel
                 </button>
-                <button onClick={handleContinue} className="text-[11px] font-mono px-3 py-1 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]">
-                  Continue →
-                </button>
+                {lookupSearched ? (
+                  <button onClick={handlePopulateAndAdvance} className="text-[11px] font-mono px-3 py-1 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]">
+                    Continue →
+                  </button>
+                ) : (
+                  <button onClick={handleContinue} disabled={lookupLoading} className="text-[11px] font-mono px-3 py-1 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC] disabled:opacity-50">
+                    {lookupLoading ? 'Looking up…' : 'Continue →'}
+                  </button>
+                )}
               </DialogFooter>
             </div>
           ) : (
@@ -290,7 +409,7 @@ export function NonReferenceDialog({ availableDomains, onClose, onCreated }: Pro
               {error && <div className="text-[10px] text-[#CC0000] mt-1.5">{error}</div>}
 
               <DialogFooter className="flex flex-row gap-2 justify-between pt-2 mt-1 border-t border-[#808080]">
-                <button onClick={() => setStep(1)} className="text-[11px] font-mono px-2 py-1 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]">
+                <button onClick={() => { setStep(1); setLookupSearched(false) }} className="text-[11px] font-mono px-2 py-1 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]">
                   ← Back
                 </button>
                 <div className="flex gap-2">
