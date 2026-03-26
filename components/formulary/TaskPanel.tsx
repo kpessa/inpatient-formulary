@@ -13,6 +13,7 @@ interface Props {
   drugKey: string
   drugDescription: string
   groupId: string
+  isAdminMode?: boolean
   onTaskCountChange?: (pending: number) => void
   onCreateTask?: () => void
   onOverrideApplied?: () => void
@@ -22,6 +23,7 @@ export function TaskPanel({
   drugKey,
   drugDescription,
   groupId,
+  isAdminMode,
   onTaskCountChange,
   onCreateTask,
   onOverrideApplied,
@@ -110,12 +112,14 @@ export function TaskPanel({
         <span className="text-[10px] font-mono font-bold text-[#404040]">
           Tasks for {drugDescription || drugKey}
         </span>
-        <button
-          onClick={onCreateTask}
-          className="text-[9px] font-mono px-1.5 py-0.5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]"
-        >
-          + Add Task
-        </button>
+        {isAdminMode && (
+          <button
+            onClick={onCreateTask}
+            className="text-[9px] font-mono px-1.5 py-0.5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC]"
+          >
+            + Add Task
+          </button>
+        )}
       </div>
 
       {/* Task list */}
@@ -167,13 +171,15 @@ export function TaskPanel({
                       {applying === task.id ? '…' : '✓'}
                     </button>
                   )}
-                  <button
-                    onClick={() => deleteTask(task.id)}
-                    title="Delete"
-                    className="text-[9px] font-mono px-1 py-0 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC] text-[#CC0000]"
-                  >
-                    ✕
-                  </button>
+                  {isAdminMode && (
+                    <button
+                      onClick={() => deleteTask(task.id)}
+                      title="Delete"
+                      className="text-[9px] font-mono px-1 py-0 border border-[#808080] bg-[#D4D0C8] hover:bg-[#C8C4BC] text-[#CC0000]"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
               </div>
             )

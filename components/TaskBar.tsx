@@ -19,8 +19,13 @@ interface TaskBarProps {
   minimizedWindows: Set<WindowId>
   focusedWindow: WindowId
   isTaskPanelOpen: boolean
+  isAdminMode: boolean
+  isMaintainerMode: boolean
   onFocusWindow: (id: WindowId) => void
   onStartMenuAction: (id: WindowId | 'tasks') => void
+  onClockClick: () => void
+  onDeactivateAdmin: () => void
+  onDeactivateMaintainer: () => void
 }
 
 const WINDOW_DEFS: WindowEntry[] = [
@@ -32,7 +37,7 @@ const WINDOW_DEFS: WindowEntry[] = [
 
 const MENU_ITEM_CLASS = 'rounded-none px-3 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white flex items-center gap-2 text-[11px] font-mono'
 
-export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPanelOpen, onFocusWindow, onStartMenuAction }: TaskBarProps) {
+export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPanelOpen, isAdminMode, isMaintainerMode, onFocusWindow, onStartMenuAction, onClockClick, onDeactivateAdmin, onDeactivateMaintainer }: TaskBarProps) {
   const [time, setTime] = useState('')
 
   useEffect(() => {
@@ -73,10 +78,14 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPa
           <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('patterns')}>
             <span>◈</span> Pattern Manager
           </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-[#808080] my-0" />
-          <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('tasks')}>
-            <span className="w-3 text-center">{isTaskPanelOpen ? '✓' : ''}</span> Task Manager
-          </DropdownMenuItem>
+          {(isAdminMode || isMaintainerMode) && (
+            <>
+              <DropdownMenuSeparator className="bg-[#808080] my-0" />
+              <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('tasks')}>
+                <span className="w-3 text-center">{isTaskPanelOpen ? '✓' : ''}</span> Task Manager
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -109,11 +118,36 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPa
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Clock */}
-      <div className="h-6 px-2 text-[10px] font-mono flex items-center border border-[#808080] shrink-0"
-           style={{ boxShadow: 'inset 1px 1px 0 #808080, inset -1px -1px 0 #fff' }}
-           suppressHydrationWarning>
-        {time}
+      {/* Mode badges + Clock tray */}
+      <div className="h-6 flex items-center border border-[#808080] shrink-0"
+           style={{ boxShadow: 'inset 1px 1px 0 #808080, inset -1px -1px 0 #fff' }}>
+        {isAdminMode && (
+          <button
+            onClick={onDeactivateAdmin}
+            title="Click to deactivate Administrator mode"
+            className="h-full px-1.5 text-[9px] font-mono font-bold flex items-center gap-0.5 border-r border-[#808080] cursor-default hover:opacity-70"
+            style={{ background: '#E8C44C', color: '#5A3C00' }}
+          >
+            🔑 Admin
+          </button>
+        )}
+        {isMaintainerMode && !isAdminMode && (
+          <button
+            onClick={onDeactivateMaintainer}
+            title="Click to deactivate Maintainer mode"
+            className="h-full px-1.5 text-[9px] font-mono font-bold flex items-center gap-0.5 border-r border-[#808080] cursor-default hover:opacity-70"
+            style={{ background: '#316AC5', color: '#FFFFFF' }}
+          >
+            🔧 Maint
+          </button>
+        )}
+        <div
+          className="h-full px-2 text-[10px] font-mono flex items-center cursor-default select-none"
+          onClick={onClockClick}
+          suppressHydrationWarning
+        >
+          {time}
+        </div>
       </div>
     </div>
   )

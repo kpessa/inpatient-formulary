@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { FormularyItem, DesignPattern } from "@/lib/types"
+import { useMultiClick, useEasterEggModes } from "@/lib/easter-eggs"
 import { computeLintViolations } from "@/lib/linter"
 import {
   getDomainColor,
@@ -128,6 +129,18 @@ export default function PharmNetFormulary() {
   const [pendingTaskCount, setPendingTaskCount] = useState(0)
   const [taskCreateContext, setTaskCreateContext] = useState<TaskCreateContext | null>(null)
   const currentFetchParamsRef = useRef<{ groupId: string; pyxisId?: string; chargeNumber?: string } | null>(null)
+
+  // Easter egg modes
+  const { isAdminMode, isMaintainerMode, toggleAdmin, toggleMaintainer, deactivateAdmin, deactivateMaintainer } = useEasterEggModes()
+  const adminClick = useMultiClick(3, 1000)
+  const maintainerClick = useMultiClick(3, 1000)
+
+  useEffect(() => { if (adminClick.triggered) toggleAdmin() }, [adminClick.triggered, toggleAdmin])
+  useEffect(() => { if (maintainerClick.triggered) toggleMaintainer() }, [maintainerClick.triggered, toggleMaintainer])
+
+  // Derived permission flags
+  const canAdmin = isAdminMode
+  const canMaintain = isAdminMode || isMaintainerMode
 
   // Design pattern linter
   const [patterns, setPatterns] = useState<DesignPattern[]>([])
@@ -390,10 +403,14 @@ export default function PharmNetFormulary() {
           className={`flex items-center justify-between text-white px-2 h-7 shrink-0 cursor-default transition-colors duration-150 ${focusedWindow === 'formulary' ? 'bg-[#C85A00]' : 'bg-[#7A3A00]'}`}
           onPointerDown={handlePointerDown('move')}
         >
-          <div className="flex items-center gap-1.5 pointer-events-none">
-          {/* App icon placeholder */}
-          <div className="w-4 h-4 bg-white/20 border border-white/40 flex items-center justify-center text-[8px]">Rx</div>
-          <span className="text-sm font-bold font-mono tracking-tight">PharmNet Inpatient Formulary Manager</span>
+          <div className="flex items-center gap-1.5">
+          {/* App icon — triple-click easter egg */}
+          <div
+            className="w-4 h-4 bg-white/20 border border-white/40 flex items-center justify-center text-[8px] cursor-default"
+            onClick={(e) => { e.stopPropagation(); adminClick.handleClick() }}
+            style={isAdminMode ? { boxShadow: '0 0 4px #E8C44C' } : undefined}
+          >Rx</div>
+          <span className="text-sm font-bold font-mono tracking-tight pointer-events-none">PharmNet Inpatient Formulary Manager</span>
         </div>
         <div className="flex gap-1" onPointerDown={e => e.stopPropagation()}>
           <button onPointerDown={e => { e.stopPropagation(); minimizeWindow('formulary') }} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
@@ -420,13 +437,17 @@ export default function PharmNetFormulary() {
             >
               Import CSV Extract...
             </DropdownMenuItem>
-            <DropdownMenuSeparator className="bg-[#808080]" />
-            <DropdownMenuItem
-              className="rounded-none px-4 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white"
-              onSelect={() => setIsBuildOpen(true)}
-            >
-              New Product Build...
-            </DropdownMenuItem>
+            {canAdmin && (
+              <>
+                <DropdownMenuSeparator className="bg-[#808080]" />
+                <DropdownMenuItem
+                  className="rounded-none px-4 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white"
+                  onSelect={() => setIsBuildOpen(true)}
+                >
+                  New Product Build...
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {["Edit", "View", "Help"].map((item) => (
@@ -514,7 +535,7 @@ export default function PharmNetFormulary() {
         item={selectedItem}
         highlightedFields={headerDiffs}
         fieldValueMap={fieldValueMap}
-        onCreateTask={currentDrugKey ? handleCreateTask : undefined}
+        onCreateTask={canAdmin && currentDrugKey ? handleCreateTask : undefined}
       />
 
       {/* Domain status bar */}
@@ -573,7 +594,7 @@ export default function PharmNetFormulary() {
           </div>
 
           {/* Tasks button */}
-          {currentDrugKey && (
+          {canMaintain && currentDrugKey && (
             <button
               onClick={() => setIsTaskPanelOpen(v => !v)}
               className={`text-[9px] font-mono px-1.5 h-[18px] border border-[#808080] shrink-0 ${isTaskPanelOpen ? 'bg-[#316AC5] text-white' : 'bg-[#D4D0C8] text-[#404040] hover:bg-[#C8C4BC]'}`}
@@ -585,13 +606,14 @@ export default function PharmNetFormulary() {
       )}
 
       {/* Task panel */}
-      {isTaskPanelOpen && currentDrugKey && selectedItem && (
+      {canMaintain && isTaskPanelOpen && currentDrugKey && selectedItem && (
         <TaskPanel
           drugKey={currentDrugKey}
           drugDescription={selectedItem.description}
           groupId={selectedItem.groupId}
+          isAdminMode={canAdmin}
           onTaskCountChange={setPendingTaskCount}
-          onCreateTask={() => setTaskCreateContext({ fieldName: '', fieldLabel: '', domainValues: [] })}
+          onCreateTask={canAdmin ? () => setTaskCreateContext({ fieldName: '', fieldLabel: '', domainValues: [] }) : undefined}
           onOverrideApplied={refreshDomainItems}
         />
       )}
@@ -629,8 +651,8 @@ export default function PharmNetFormulary() {
         {activeTab === "dispense" && <DispenseTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'dispense').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
         {activeTab === "inventory" && <InventoryTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'inventory').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
         {activeTab === "clinical" && <ClinicalTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'clinical').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
-        {activeTab === "supply" && <SupplyTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'supply').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={currentDrugKey ? handleCreateTask : undefined} />}
-        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'identifiers').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={currentDrugKey ? handleCreateTask : undefined} lintViolations={lintViolations} />}
+        {activeTab === "supply" && <SupplyTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'supply').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={canAdmin && currentDrugKey ? handleCreateTask : undefined} />}
+        {activeTab === "identifiers" && <IdentifiersTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'identifiers').fields} fieldValueMap={fieldValueMap} domainRecords={domainRecords} onCreateTask={canAdmin && currentDrugKey ? handleCreateTask : undefined} lintViolations={lintViolations} />}
         {activeTab === "tpn-details" && (
           <div className="p-4 text-xs font-mono text-[#808080]">TPN Details tab content</div>
         )}
@@ -697,7 +719,7 @@ export default function PharmNetFormulary() {
         scope={scope}
         availableDomains={availableDomains}
         onClose={() => { setIsSearchModalOpen(false); if (focusedWindow === 'search') setFocusedWindow('formulary') }}
-        onCreateTask={handleCreateTaskFromSearch}
+        onCreateTask={canAdmin ? handleCreateTaskFromSearch : undefined}
         onOpenCategoryManager={() => { setIsCategoryManagerOpen(true); focusWindow('categories') }}
         onSelect={(item) => {
           setSelectedItemPreview(item)
@@ -725,7 +747,7 @@ export default function PharmNetFormulary() {
       )}
 
       {/* Task create dialog */}
-      {taskCreateContext !== null && (taskCreateContext.drugKey || currentDrugKey) && (
+      {canAdmin && taskCreateContext !== null && (taskCreateContext.drugKey || currentDrugKey) && (
         <TaskCreateDialog
           drugKey={taskCreateContext.drugKey ?? currentDrugKey ?? ''}
           drugDescription={taskCreateContext.drugDescription ?? selectedItem?.description ?? ''}
@@ -742,7 +764,7 @@ export default function PharmNetFormulary() {
       )}
 
       {/* Build checklist */}
-      {isBuildOpen && (
+      {canAdmin && isBuildOpen && (
         <BuildChecklist
           availableDomains={availableDomains}
           onClose={() => setIsBuildOpen(false)}
@@ -801,6 +823,8 @@ export default function PharmNetFormulary() {
       minimizedWindows={minimizedWindows}
       focusedWindow={focusedWindow}
       isTaskPanelOpen={isTaskPanelOpen}
+      isAdminMode={isAdminMode}
+      isMaintainerMode={isMaintainerMode}
       onFocusWindow={(id) => {
         if (id === 'formulary') focusWindow('formulary')
         else if (id === 'search' && isSearchModalOpen) focusWindow('search')
@@ -814,6 +838,9 @@ export default function PharmNetFormulary() {
         else if (id === 'patterns') { setIsPatternManagerOpen(true); focusWindow('patterns') }
         else if (id === 'tasks') setIsTaskPanelOpen(v => !v)
       }}
+      onClockClick={maintainerClick.handleClick}
+      onDeactivateAdmin={deactivateAdmin}
+      onDeactivateMaintainer={deactivateMaintainer}
     />
     </div>
   )
