@@ -83,7 +83,27 @@ async function migrate() {
       notes TEXT,
       PRIMARY KEY (build_id, domain)
     );
+
+    CREATE TABLE IF NOT EXISTS task_domain_progress (
+      task_id TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'done')),
+      completed_at TEXT,
+      completed_by TEXT,
+      notes TEXT,
+      PRIMARY KEY (task_id, domain)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tdp_task_id ON task_domain_progress(task_id);
   `)
+
+  // Add group_id column (idempotent — ignores if already exists)
+  try {
+    await db.execute('ALTER TABLE change_tasks ADD COLUMN group_id TEXT')
+    console.log('Added group_id column to change_tasks')
+  } catch {
+    // Column already exists
+  }
 
   console.log('Migration complete.')
 }

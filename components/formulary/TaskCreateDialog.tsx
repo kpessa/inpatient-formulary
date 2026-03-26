@@ -10,6 +10,7 @@ import type { DomainValue } from '@/lib/formulary-diff'
 interface Props {
   drugKey: string
   drugDescription: string
+  groupId?: string
   fieldName?: string
   fieldLabel?: string
   domainValues?: DomainValue[]
@@ -21,6 +22,7 @@ interface Props {
 export function TaskCreateDialog({
   drugKey,
   drugDescription,
+  groupId,
   fieldName,
   fieldLabel,
   domainValues,
@@ -57,12 +59,18 @@ export function TaskCreateDialog({
       const domainValuesJson = domainValues
         ? JSON.stringify(Object.fromEntries(domainValues.map(dv => [dv.domain, dv.value])))
         : undefined
+      // Determine which domains to track progress for
+      const domains = targetDomain === 'all'
+        ? availableDomains
+        : availableDomains.filter(d => d === targetDomain)
+
       await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           drugKey,
           drugDescription,
+          groupId,
           type: isDiff ? 'diff' : 'free_form',
           fieldName: isDiff ? fieldName : (freeFormLabel || undefined),
           fieldLabel: isDiff ? fieldLabel : (freeFormLabel || undefined),
@@ -72,6 +80,7 @@ export function TaskCreateDialog({
           status: 'pending',
           assignedTo: assignedTo || undefined,
           notes: notes || undefined,
+          domains,
         }),
       })
       onCreated()

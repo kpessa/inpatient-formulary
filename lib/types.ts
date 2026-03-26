@@ -251,10 +251,20 @@ export interface Identifiers {
 // ---------------------------------------------------------------------------
 // Task tracking
 // ---------------------------------------------------------------------------
+export interface TaskDomainProgress {
+  taskId: string
+  domain: string
+  status: 'pending' | 'in_progress' | 'done'
+  completedAt?: string
+  completedBy?: string
+  notes?: string
+}
+
 export interface ChangeTask {
   id: string
   drugKey: string
   drugDescription: string
+  groupId?: string
   type: 'diff' | 'free_form'
   fieldName?: string
   fieldLabel?: string
@@ -268,6 +278,7 @@ export interface ChangeTask {
   updatedAt: string
   completedAt?: string
   completedBy?: string
+  domainProgress?: TaskDomainProgress[]
 }
 
 export interface FieldOverride {

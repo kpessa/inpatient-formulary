@@ -20,6 +20,7 @@ import { BuildChecklist } from "@/components/formulary/BuildChecklist"
 import { NonReferenceDialog } from "@/components/formulary/NonReferenceDialog"
 import { CategoryManager } from "@/components/formulary/CategoryManager"
 import { PatternManager } from "@/components/formulary/PatternManager"
+import { TaskManagerWindow } from "@/components/formulary/TaskManagerWindow"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -88,6 +89,7 @@ interface TaskCreateContext {
   domainValues: DomainValue[]
   drugKey?: string
   drugDescription?: string
+  groupId?: string
 }
 
 export default function PharmNetFormulary() {
@@ -100,6 +102,8 @@ export default function PharmNetFormulary() {
   const [isNonReferenceOpen, setIsNonReferenceOpen] = useState(false)
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false)
   const [isPatternManagerOpen, setIsPatternManagerOpen] = useState(false)
+  const [isTaskManagerOpen, setIsTaskManagerOpen] = useState(false)
+  const [taskSummary, setTaskSummary] = useState<{ pending: number; inProgress: number } | undefined>(undefined)
 
   // Window manager
   const [focusedWindow, setFocusedWindow] = useState<WindowId>('formulary')
@@ -141,6 +145,20 @@ export default function PharmNetFormulary() {
   // Derived permission flags
   const canAdmin = isAdminMode
   const canMaintain = isAdminMode || isMaintainerMode
+
+  // Task summary polling (when any mode is active)
+  useEffect(() => {
+    if (!canMaintain) { setTaskSummary(undefined); return }
+    const fetchSummary = () => {
+      fetch('/api/tasks/summary')
+        .then(r => r.json())
+        .then((d: { pending: number; inProgress: number }) => setTaskSummary({ pending: d.pending, inProgress: d.inProgress }))
+        .catch(() => {})
+    }
+    fetchSummary()
+    const id = setInterval(fetchSummary, 30000)
+    return () => clearInterval(id)
+  }, [canMaintain])
 
   // Design pattern linter
   const [patterns, setPatterns] = useState<DesignPattern[]>([])
@@ -236,6 +254,24 @@ export default function PharmNetFormulary() {
       doFetchDomainItems(currentFetchParamsRef.current, newValue, available, baseDomain)
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Override tracking — fetch which fields have overrides when in Confirmed mode
+  // ---------------------------------------------------------------------------
+  const [overriddenFields, setOverriddenFields] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (showRawExtract || !selectedItemPreview?.groupId || !baseDomain) {
+      setOverriddenFields(new Set())
+      return
+    }
+    fetch(`/api/overrides?domain=${encodeURIComponent(baseDomain)}&groupId=${encodeURIComponent(selectedItemPreview.groupId)}`)
+      .then(r => r.json())
+      .then((d: { overrides: { fieldPath: string }[] }) => {
+        setOverriddenFields(new Set((d.overrides ?? []).map(o => o.fieldPath)))
+      })
+      .catch(() => setOverriddenFields(new Set()))
+  }, [showRawExtract, selectedItemPreview?.groupId, baseDomain])
 
   // ---------------------------------------------------------------------------
   // Derived diff values — prod domains sorted west → central → east
@@ -373,8 +409,8 @@ export default function PharmNetFormulary() {
     setTaskCreateContext({ fieldName, fieldLabel, domainValues: values })
   }
 
-  const handleCreateTaskFromSearch = (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[]) => {
-    setTaskCreateContext({ fieldName: fieldName ?? '', fieldLabel: fieldLabel ?? '', domainValues: domainValues ?? [], drugKey, drugDescription })
+  const handleCreateTaskFromSearch = (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[], groupId?: string) => {
+    setTaskCreateContext({ fieldName: fieldName ?? '', fieldLabel: fieldLabel ?? '', domainValues: domainValues ?? [], drugKey, drugDescription, groupId })
   }
 
   if (!rect) {
@@ -535,6 +571,7 @@ export default function PharmNetFormulary() {
         item={selectedItem}
         highlightedFields={headerDiffs}
         fieldValueMap={fieldValueMap}
+        overriddenFields={overriddenFields.size > 0 ? overriddenFields : undefined}
         onCreateTask={canAdmin && currentDrugKey ? handleCreateTask : undefined}
       />
 
@@ -751,10 +788,19 @@ export default function PharmNetFormulary() {
         <TaskCreateDialog
           drugKey={taskCreateContext.drugKey ?? currentDrugKey ?? ''}
           drugDescription={taskCreateContext.drugDescription ?? selectedItem?.description ?? ''}
+          groupId={taskCreateContext.groupId ?? selectedItem?.groupId}
           fieldName={taskCreateContext.fieldName || undefined}
           fieldLabel={taskCreateContext.fieldLabel || undefined}
           domainValues={taskCreateContext.domainValues.length > 0 ? taskCreateContext.domainValues : undefined}
-          availableDomains={prodDomains}
+          availableDomains={
+            // Only include domains where the drug actually exists
+            availableDomains
+              .map(d => d.domain)
+              .filter(dk => domainItems[dk] != null)
+              .length > 0
+              ? availableDomains.map(d => d.domain).filter(dk => domainItems[dk] != null)
+              : prodDomains // fallback for search-originated tasks
+          }
           onClose={() => setTaskCreateContext(null)}
           onCreated={() => {
             setTaskCreateContext(null)
@@ -812,6 +858,18 @@ export default function PharmNetFormulary() {
         onFindViolations={handleFindViolations}
       />
 
+      {/* Task Manager Window */}
+      <TaskManagerWindow
+        open={isTaskManagerOpen}
+        minimized={minimizedWindows.has('tasks')}
+        focused={focusedWindow === 'tasks' && !minimizedWindows.has('tasks')}
+        onFocus={() => focusWindow('tasks')}
+        onMinimize={() => minimizeWindow('tasks')}
+        onClose={() => { setIsTaskManagerOpen(false); if (focusedWindow === 'tasks') setFocusedWindow('formulary') }}
+        availableDomains={availableDomains}
+        isAdminMode={canAdmin}
+      />
+
     {/* Windows 95 Taskbar */}
     <TaskBar
       openWindows={new Set<WindowId>([
@@ -819,24 +877,26 @@ export default function PharmNetFormulary() {
         ...(isSearchModalOpen ? ['search' as WindowId] : []),
         ...(isCategoryManagerOpen ? ['categories' as WindowId] : []),
         ...(isPatternManagerOpen ? ['patterns' as WindowId] : []),
+        ...(isTaskManagerOpen ? ['tasks' as WindowId] : []),
       ])}
       minimizedWindows={minimizedWindows}
       focusedWindow={focusedWindow}
-      isTaskPanelOpen={isTaskPanelOpen}
       isAdminMode={isAdminMode}
       isMaintainerMode={isMaintainerMode}
+      taskSummary={taskSummary}
       onFocusWindow={(id) => {
         if (id === 'formulary') focusWindow('formulary')
         else if (id === 'search' && isSearchModalOpen) focusWindow('search')
         else if (id === 'categories' && isCategoryManagerOpen) focusWindow('categories')
         else if (id === 'patterns' && isPatternManagerOpen) focusWindow('patterns')
+        else if (id === 'tasks' && isTaskManagerOpen) focusWindow('tasks')
       }}
       onStartMenuAction={(id) => {
         if (id === 'formulary') focusWindow('formulary')
         else if (id === 'search') { setIsSearchModalOpen(true); focusWindow('search') }
         else if (id === 'categories') { setIsCategoryManagerOpen(true); focusWindow('categories') }
         else if (id === 'patterns') { setIsPatternManagerOpen(true); focusWindow('patterns') }
-        else if (id === 'tasks') setIsTaskPanelOpen(v => !v)
+        else if (id === 'tasks') { setIsTaskManagerOpen(true); focusWindow('tasks') }
       }}
       onClockClick={maintainerClick.handleClick}
       onDeactivateAdmin={deactivateAdmin}

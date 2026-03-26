@@ -12,14 +12,21 @@ interface FormularyHeaderProps {
   item: FormularyItem | null
   highlightedFields?: Set<string>
   fieldValueMap?: FieldValueMap
+  overriddenFields?: Set<string>
   onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void
 }
 
-export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCreateTask }: FormularyHeaderProps) {
+export function FormularyHeader({ item, highlightedFields, fieldValueMap, overriddenFields, onCreateTask }: FormularyHeaderProps) {
   const h = (...fields: string[]) =>
     fields.some(f => highlightedFields?.has(f))
       ? 'bg-[#FFF3CD] border-[#E6A817]'
       : ''
+
+  // Override indicator: adds styled * to label if field has been overridden
+  const ol = (fieldName: string, label: string) =>
+    overriddenFields?.has(fieldName)
+      ? <>{label} <span className="text-[#316AC5] font-bold" title="Value overridden from extract">*</span></>
+      : label
 
   const taskProps = (fieldName: string, fieldLabel: string) =>
     onCreateTask && fieldValueMap?.[fieldName]
@@ -31,7 +38,7 @@ export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCrea
       {/* Row 1: Description / Strength / Status / Therapeutic Substitutions */}
       <div className="flex gap-3 items-end mb-2">
         <FieldDiffTooltip values={fieldValueMap?.['description']} className="flex-1 min-w-0 max-w-[220px]" {...taskProps('description', 'Description')}>
-          <FormField label="Description:" required>
+          <FormField label={ol('description', 'Description:')} required>
             <Input
               value={item?.description ?? ""}
               readOnly
@@ -40,7 +47,7 @@ export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCrea
           </FormField>
         </FieldDiffTooltip>
         <FieldDiffTooltip values={fieldValueMap?.['strength']} className="w-28" {...taskProps('strength', 'Strength')}>
-          <FormField label="Strength:" required>
+          <FormField label={ol('strength', 'Strength:')} required>
             <Input
               value={item ? `${item.strength} ${item.strengthUnit}`.trim() : ""}
               readOnly
@@ -49,7 +56,7 @@ export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCrea
           </FormField>
         </FieldDiffTooltip>
         <FieldDiffTooltip values={fieldValueMap?.['status']} className="w-28" {...taskProps('status', 'Status')}>
-          <FormField label="Status:">
+          <FormField label={ol('status', 'Status:')}>
             <Input
               value={item?.status ?? ""}
               disabled
@@ -66,7 +73,7 @@ export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCrea
       {/* Row 2: Generic / Dosage form / Legal status / Mnemonic */}
       <div className="flex gap-3 items-end">
         <FieldDiffTooltip values={fieldValueMap?.['genericName']} className="flex-1 min-w-0 max-w-[220px]" {...taskProps('genericName', 'Generic Name')}>
-          <FormField label="Generic:" required>
+          <FormField label={ol('genericName', 'Generic:')} required>
             <Input
               value={item?.genericName ?? ""}
               readOnly
@@ -75,7 +82,7 @@ export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCrea
           </FormField>
         </FieldDiffTooltip>
         <FieldDiffTooltip values={fieldValueMap?.['dosageForm']} className="w-28" {...taskProps('dosageForm', 'Dosage Form')}>
-          <FormField label="Dosage form:" required>
+          <FormField label={ol('dosageForm', 'Dosage form:')} required>
             <Input
               value={item?.dosageForm ?? ""}
               readOnly
@@ -84,7 +91,7 @@ export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCrea
           </FormField>
         </FieldDiffTooltip>
         <FieldDiffTooltip values={fieldValueMap?.['legalStatus']} className="w-28" {...taskProps('legalStatus', 'Legal Status')}>
-          <FormField label="Legal status:" required>
+          <FormField label={ol('legalStatus', 'Legal status:')} required>
             <Input
               value={item?.legalStatus ?? ""}
               readOnly
@@ -93,7 +100,7 @@ export function FormularyHeader({ item, highlightedFields, fieldValueMap, onCrea
           </FormField>
         </FieldDiffTooltip>
         <FieldDiffTooltip values={fieldValueMap?.['mnemonic']} className="flex-1 min-w-0 max-w-[140px]" {...taskProps('mnemonic', 'Mnemonic')}>
-          <FormField label="Mnemonic:" required>
+          <FormField label={ol('mnemonic', 'Mnemonic:')} required>
             <Input
               value={item?.mnemonic ?? ""}
               readOnly

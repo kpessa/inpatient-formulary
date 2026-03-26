@@ -92,7 +92,7 @@ interface SearchModalProps {
   scope: Scope
   availableDomains: { region: string; env: string; domain: string }[]
   onSelect: (item: FormularyItem) => void
-  onCreateTask?: (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[]) => void
+  onCreateTask?: (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[], groupId?: string) => void
   onOpenCategoryManager?: () => void
   categoryTrigger?: { categoryId: string; seq: number } | null
 }
@@ -2560,6 +2560,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                     colId,
                                     FIELD_LABELS[colId] ?? colId,
                                     buildFieldDomainValues(colId),
+                                    r.groupId,
                                   )
                                 }}
                                 className={`opacity-0 group-hover/cell:opacity-100 shrink-0 text-[7px] h-3.5 px-0.5 leading-none transition-opacity
@@ -2627,6 +2628,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                       onCreateTask(
                                         r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId,
                                         r.description,
+                                        undefined, undefined, undefined,
+                                        r.groupId,
                                       )
                                     }}
                                     className={`text-[8px] font-mono h-4 px-0.5 leading-none border rounded-none whitespace-nowrap
@@ -2815,7 +2818,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                                   <span className="truncate">{r.chargeNumber}</span>
                                                 </span>
                                                 <button
-                                                  onClick={e => { e.stopPropagation(); onCreateTask(r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId, r.description, 'charge', 'Charge Number', buildFieldDomainValues('charge')) }}
+                                                  onClick={e => { e.stopPropagation(); onCreateTask(r.pyxisId?.trim() || r.chargeNumber?.trim() || r.groupId, r.description, 'charge', 'Charge Number', buildFieldDomainValues('charge'), r.groupId) }}
                                                   className={`opacity-0 group-hover/cell:opacity-100 shrink-0 text-[7px] h-3.5 px-0.5 leading-none transition-opacity ${isSelected ? 'bg-white/20 text-white border border-white/30' : 'bg-[#1a4a9a] text-white'}`}
                                                   title="Flag Charge Number for standardization"
                                                 >⚑</button>
@@ -2848,7 +2851,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                     : col.id === 'mnemonic' ? cellWithTask('mnemonic', r.mnemonic)
                                     : col.id === 'generic' ? cellWithTask('generic', r.genericName)
                                     : col.id === 'strength' ? cellWithTask('strength', strengthForm)
-                                    : col.id === 'form' ? r.dosageForm
+                                    : col.id === 'form' ? cellWithTask('form', r.dosageForm)
                                     : col.id === 'description' ? cellWithTask('description', r.description)
                                     : cellWithTask('brand', r.brandName)
                                   return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }} {...pLintH}>{content}</td>
@@ -2921,6 +2924,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                         },
                                         onMouseLeave: () => setLintTooltip(null),
                                       } : {}
+                                      // Wrap diff cell content in tooltip when isDiff
+                                      const wrapDiff = (colId: string, content: React.ReactNode) =>
+                                        isDiff ? <FieldDiffTooltip values={buildFieldDomainValues(colId)}><span className="truncate block">{content}</span></FieldDiffTooltip> : content
+
                                       switch (col.id) {
                                         case 'domain': return (
                                           <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }}>
@@ -2928,15 +2935,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                               className="text-[9px] font-bold px-1 rounded-sm">{getDomainBadge(vreg, 'prod')}</span>
                                           </td>
                                         )
-                                        case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.description}</td>
-                                        case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.genericName}</td>
-                                        case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{vStrengthForm}</td>
-                                        case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>{v.dosageForm}</td>
-                                        case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.mnemonic}</td>
-                                        case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.chargeNumber}</td>
+                                        case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{wrapDiff(col.id, v.description)}</td>
+                                        case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{wrapDiff(col.id, v.genericName)}</td>
+                                        case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{wrapDiff(col.id, vStrengthForm)}</td>
+                                        case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>{wrapDiff(col.id, v.dosageForm)}</td>
+                                        case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{wrapDiff(col.id, v.mnemonic)}</td>
+                                        case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{wrapDiff(col.id, v.chargeNumber)}</td>
                                         case 'chargeDesc':  return <td key={col.id} className="py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align, padding: chargeDescCollapsed ? 0 : undefined, paddingLeft: chargeDescCollapsed ? 0 : 8, paddingRight: chargeDescCollapsed ? 0 : 8 }}>{chargeDescCollapsed ? null : (v.cdmDescription ?? '')}</td>
-                                        case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.brandName}</td>
-                                        case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.pyxisId}</td>
+                                        case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{wrapDiff(col.id, v.brandName)}</td>
+                                        case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{wrapDiff(col.id, v.pyxisId)}</td>
                                         case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }}>{[v.searchMedication && 'Med', v.searchIntermittent && 'Int', v.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
                                         case 'facility': {
                                           const vFacs = v.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
@@ -2978,6 +2985,9 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                       {visibleCols.map(col => {
                                         const isDiff = nonProdDiffCols.has(col.id)
                                         const diffStyle = isDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
+                                        const wrapNpDiff = (colId: string, content: React.ReactNode) =>
+                                          isDiff ? <FieldDiffTooltip values={buildFieldDomainValues(colId)}><span className="truncate block">{content}</span></FieldDiffTooltip> : content
+
                                         switch (col.id) {
                                           case 'domain': return (
                                             <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>
@@ -2986,15 +2996,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                               <span className="text-[9px] text-[#888] ml-1">{nenv}</span>
                                             </td>
                                           )
-                                          case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.description}</td>
-                                          case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.genericName}</td>
-                                          case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nvStrengthForm}</td>
-                                          case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.dosageForm}</td>
-                                          case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.mnemonic}</td>
-                                          case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{nv.chargeNumber}</td>
+                                          case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nv.description)}</td>
+                                          case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nv.genericName)}</td>
+                                          case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nvStrengthForm)}</td>
+                                          case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nv.dosageForm)}</td>
+                                          case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nv.mnemonic)}</td>
+                                          case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nv.chargeNumber)}</td>
                                           case 'chargeDesc':  return <td key={col.id} className="py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align, padding: chargeDescCollapsed ? 0 : undefined, paddingLeft: chargeDescCollapsed ? 0 : 8, paddingRight: chargeDescCollapsed ? 0 : 8 }}>{chargeDescCollapsed ? null : (nv.cdmDescription ?? '')}</td>
-                                          case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.brandName}</td>
-                                          case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.pyxisId}</td>
+                                          case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nv.brandName)}</td>
+                                          case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{wrapNpDiff(col.id, nv.pyxisId)}</td>
                                           case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{[nv.searchMedication && 'Med', nv.searchIntermittent && 'Int', nv.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
                                           case 'facility': {
                                             const nvFacs = nv.activeFacilities.filter(f => !CORP_FACILITIES.has(f))

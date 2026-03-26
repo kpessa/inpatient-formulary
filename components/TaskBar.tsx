@@ -6,7 +6,7 @@ import {
   DropdownMenuItem, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 
-export type WindowId = 'formulary' | 'search' | 'categories' | 'patterns'
+export type WindowId = 'formulary' | 'search' | 'categories' | 'patterns' | 'tasks'
 
 interface WindowEntry {
   id: WindowId
@@ -18,9 +18,9 @@ interface TaskBarProps {
   openWindows: Set<WindowId>
   minimizedWindows: Set<WindowId>
   focusedWindow: WindowId
-  isTaskPanelOpen: boolean
   isAdminMode: boolean
   isMaintainerMode: boolean
+  taskSummary?: { pending: number; inProgress: number }
   onFocusWindow: (id: WindowId) => void
   onStartMenuAction: (id: WindowId | 'tasks') => void
   onClockClick: () => void
@@ -33,11 +33,12 @@ const WINDOW_DEFS: WindowEntry[] = [
   { id: 'search',      label: 'Product Search',      icon: '🔍' },
   { id: 'categories',  label: 'Category Manager',    icon: '🏷' },
   { id: 'patterns',    label: 'Pattern Manager',     icon: '◈' },
+  { id: 'tasks',       label: 'Task Manager',         icon: '📋' },
 ]
 
 const MENU_ITEM_CLASS = 'rounded-none px-3 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white flex items-center gap-2 text-[11px] font-mono'
 
-export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPanelOpen, isAdminMode, isMaintainerMode, onFocusWindow, onStartMenuAction, onClockClick, onDeactivateAdmin, onDeactivateMaintainer }: TaskBarProps) {
+export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isAdminMode, isMaintainerMode, taskSummary, onFocusWindow, onStartMenuAction, onClockClick, onDeactivateAdmin, onDeactivateMaintainer }: TaskBarProps) {
   const [time, setTime] = useState('')
 
   useEffect(() => {
@@ -82,7 +83,7 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPa
             <>
               <DropdownMenuSeparator className="bg-[#808080] my-0" />
               <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('tasks')}>
-                <span className="w-3 text-center">{isTaskPanelOpen ? '✓' : ''}</span> Task Manager
+                <span className="w-3 text-center">{openWindows.has('tasks') ? '✓' : ''}</span> Task Manager
               </DropdownMenuItem>
             </>
           )}
@@ -118,9 +119,18 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isTaskPa
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Mode badges + Clock tray */}
+      {/* Task summary + Mode badges + Clock tray */}
       <div className="h-6 flex items-center border border-[#808080] shrink-0"
            style={{ boxShadow: 'inset 1px 1px 0 #808080, inset -1px -1px 0 #fff' }}>
+        {(isAdminMode || isMaintainerMode) && taskSummary && (taskSummary.pending + taskSummary.inProgress) > 0 && (
+          <button
+            onClick={() => onStartMenuAction('tasks')}
+            title={`${taskSummary.pending} pending, ${taskSummary.inProgress} in progress — Open Task Manager`}
+            className="h-full px-1.5 text-[9px] font-mono font-bold flex items-center gap-0.5 border-r border-[#808080] cursor-default hover:opacity-70"
+          >
+            📋 {taskSummary.pending + taskSummary.inProgress}
+          </button>
+        )}
         {isAdminMode && (
           <button
             onClick={onDeactivateAdmin}
