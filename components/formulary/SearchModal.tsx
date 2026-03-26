@@ -983,8 +983,9 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     { id: "description", label: "Description",        width: 220, align: 'left'   as const },
     { id: "brand",       label: "Brand Name",         width: 100, align: 'left'   as const },
   ])
-  const [hiddenCols, setHiddenCols] = useState(new Set(['chargeDesc']))
-  const visibleCols = useMemo(() => cols.filter(c => !hiddenCols.has(c.id)), [cols, hiddenCols])
+  const [chargeDescCollapsed, setChargeDescCollapsed] = useState(true)
+  const CHARGE_DESC_COLLAPSED_WIDTH = 20
+  const visibleCols = useMemo(() => cols, [cols])
   const resizingCol = useRef<{ idx: number; startX: number; startWidth: number } | null>(null)
   // Drag-to-reorder
   const [colDrag, setColDrag] = useState<{ from: number; to: number } | null>(null)
@@ -1095,7 +1096,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       const w = Math.min(window.innerWidth, 1400)
       setRect({ x: (window.innerWidth - w) / 2, y: 0, w, h: window.innerHeight - 32 })
       setTimeout(() => {
-        cols.forEach(col => { if (!hiddenCols.has(col.id) && !['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) })
+        cols.forEach(col => { if (!chargeDescCollapsed || col.id !== 'chargeDesc') { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) } })
       }, 50)
     }
   }
@@ -1114,7 +1115,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   useEffect(() => {
     if (!isMaximized) return
     const id = requestAnimationFrame(() => {
-      cols.forEach(col => { if (!hiddenCols.has(col.id) && !['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) })
+      cols.forEach(col => { if (!chargeDescCollapsed || col.id !== 'chargeDesc') { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) } })
     })
     return () => cancelAnimationFrame(id)
   }, [isMaximized])
@@ -1279,10 +1280,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
   const autoFitColumn = (colId: string) => {
     const colIdx = cols.findIndex(c => c.id === colId)
-    if (colIdx === -1 || !tableRef.current || hiddenCols.has(colId)) return
+    if (colIdx === -1 || !tableRef.current) return
 
     // DOM index among visible columns only
-    const domIdx = cols.slice(0, colIdx + 1).filter(c => !hiddenCols.has(c.id)).length - 1
+    const domIdx = cols.slice(0, colIdx + 1).length - 1
 
     // Create a hidden probe span to measure text at the exact font used in cells
     const probe = document.createElement('span')
@@ -2090,7 +2091,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   Unified
                 </label>
                 <button
-                  onClick={() => cols.forEach(col => { if (!hiddenCols.has(col.id) && !['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) })}
+                  onClick={() => cols.forEach(col => { if (!chargeDescCollapsed || col.id !== 'chargeDesc') { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) } })}
                   className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
                   title="Fit all columns to content"
                 >
@@ -2399,16 +2400,37 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 <table ref={tableRef} className="table-fixed w-max text-left border-collapse whitespace-nowrap">
                   <colgroup>
                     <col style={{ width: 24 }} />
-                    {visibleCols.map((c) => <col key={c.id} style={{ width: c.width }} />)}
+                    {visibleCols.map((c) => <col key={c.id} style={{ width: c.id === 'chargeDesc' && chargeDescCollapsed ? CHARGE_DESC_COLLAPSED_WIDTH : c.width }} />)}
                   </colgroup>
                   <thead className="bg-[#EAEAEA] sticky top-0 z-10 border-b border-[#808080]">
                     <tr>
                       <th className="border-r border-b border-[#C0C0C0] px-1 font-normal text-center bg-gradient-to-b from-white to-[#EAEAEA] shadow-[inset_-1px_-1px_0_#A0A0A0]"></th>
                       {cols.map((col, i) => {
-                        if (hiddenCols.has(col.id)) return null
                         const isDragging = colDrag?.from === i
                         const isDropTarget = colDrag !== null && colDrag.to === i && colDrag.from !== i
                         const isFiltered = !!(colFilters[col.id] && (colFilters[col.id].text || (colFilters[col.id].selected?.size ?? 0) > 0 || (colFilters[col.id].selected2?.size ?? 0) > 0))
+                        {/* Collapsed chargeDesc sidebar strip */}
+                        if (col.id === 'chargeDesc' && chargeDescCollapsed) {
+                          return (
+                            <th
+                              key={col.id}
+                              ref={el => { thRefs.current[i] = el }}
+                              className="relative border-r border-b border-[#C0C0C0] font-normal text-xs bg-gradient-to-b from-white to-[#EAEAEA] shadow-[inset_-1px_-1px_0_#A0A0A0] overflow-hidden select-none"
+                              style={{ padding: 0, width: CHARGE_DESC_COLLAPSED_WIDTH }}
+                            >
+                              <button
+                                onPointerDown={e => e.stopPropagation()}
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  setChargeDescCollapsed(false)
+                                  setTimeout(() => autoFitColumn('chargeDesc'), 0)
+                                }}
+                                className="w-full h-full flex items-center justify-center text-[9px] font-bold text-[#316AC5] hover:bg-[#316AC5]/20"
+                                title="Show Charge Description"
+                              >{'\u25B6'}</button>
+                            </th>
+                          )
+                        }
                         return (
                           <th
                             key={col.id}
@@ -2444,14 +2466,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                 )
                               })()}
                             </span>
-                            {/* CDM expand/collapse toggle — always visible */}
-                            {col.id === 'charge' && (
+                            {/* Charge Desc collapse toggle */}
+                            {col.id === 'chargeDesc' && (
                               <button
                                 onPointerDown={e => e.stopPropagation()}
-                                onClick={e => { e.stopPropagation(); setHiddenCols(prev => { const n = new Set(prev); if (n.has('chargeDesc')) n.delete('chargeDesc'); else n.add('chargeDesc'); return n }) }}
-                                className="absolute right-7 top-0 bottom-0 w-4 flex items-center justify-center text-[9px] font-bold text-[#316AC5] hover:bg-[#316AC5]/20 z-10"
-                                title={hiddenCols.has('chargeDesc') ? 'Show Charge Description' : 'Hide Charge Description'}
-                              >{hiddenCols.has('chargeDesc') ? '\u25B6' : '\u25C0'}</button>
+                                onClick={e => { e.stopPropagation(); setChargeDescCollapsed(true) }}
+                                className="absolute left-0 top-0 bottom-0 w-4 flex items-center justify-center text-[9px] font-bold text-[#316AC5] hover:bg-[#316AC5]/20 z-10"
+                                title="Hide Charge Description"
+                              >{'\u25C0'}</button>
                             )}
                             {/* Filter button */}
                             <button
@@ -2832,7 +2854,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                   return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }} {...pLintH}>{content}</td>
                                 }
                                 case "chargeDesc":
-                                  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align }}>{r.cdmDescription ?? ''}</td>
+                                  return <td key={col.id} className="py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align, padding: chargeDescCollapsed ? 0 : undefined, paddingLeft: chargeDescCollapsed ? 0 : 8, paddingRight: chargeDescCollapsed ? 0 : 8 }}>{chargeDescCollapsed ? null : (r.cdmDescription ?? '')}</td>
                                 default:            return <td key={col.id} />
                               }
                             })}
@@ -2912,7 +2934,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                         case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>{v.dosageForm}</td>
                                         case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.mnemonic}</td>
                                         case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.chargeNumber}</td>
-                                        case 'chargeDesc':  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>{v.cdmDescription ?? ''}</td>
+                                        case 'chargeDesc':  return <td key={col.id} className="py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align, padding: chargeDescCollapsed ? 0 : undefined, paddingLeft: chargeDescCollapsed ? 0 : 8, paddingRight: chargeDescCollapsed ? 0 : 8 }}>{chargeDescCollapsed ? null : (v.cdmDescription ?? '')}</td>
                                         case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.brandName}</td>
                                         case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.pyxisId}</td>
                                         case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }}>{[v.searchMedication && 'Med', v.searchIntermittent && 'Int', v.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
@@ -2970,7 +2992,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                           case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.dosageForm}</td>
                                           case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.mnemonic}</td>
                                           case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{nv.chargeNumber}</td>
-                                          case 'chargeDesc':  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.cdmDescription ?? ''}</td>
+                                          case 'chargeDesc':  return <td key={col.id} className="py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align, padding: chargeDescCollapsed ? 0 : undefined, paddingLeft: chargeDescCollapsed ? 0 : 8, paddingRight: chargeDescCollapsed ? 0 : 8 }}>{chargeDescCollapsed ? null : (nv.cdmDescription ?? '')}</td>
                                           case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.brandName}</td>
                                           case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.pyxisId}</td>
                                           case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{[nv.searchMedication && 'Med', nv.searchIntermittent && 'Int', nv.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
@@ -3016,7 +3038,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                             {visibleCols.map(col => {
                               switch (col.id) {
                                 case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ textAlign: col.align }}>{cdm.cdmCode}</td>
-                                case 'chargeDesc':  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align }}>{cdm.techDesc || cdm.description}</td>
+                                case 'chargeDesc':  return <td key={col.id} className="py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align, padding: chargeDescCollapsed ? 0 : undefined, paddingLeft: chargeDescCollapsed ? 0 : 8, paddingRight: chargeDescCollapsed ? 0 : 8 }}>{chargeDescCollapsed ? null : (cdm.techDesc || cdm.description)}</td>
                                 case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align }}>{cdm.techDesc || cdm.description}</td>
                                 case 'brand':       return <td key={col.id} className="px-2 py-0.5" style={{ textAlign: col.align }}>{cdm.procCode && cdm.procCode !== '-' && cdm.procCode !== 'XXXXX' ? cdm.procCode : ''}</td>
                                 default:            return <td key={col.id} className="px-2 py-0.5" style={{ textAlign: col.align }} />
