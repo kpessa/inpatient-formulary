@@ -2422,14 +2422,6 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                               }}
                             >
                               {col.label}
-                              {col.id === 'charge' && (
-                                <button
-                                  onPointerDown={e => e.stopPropagation()}
-                                  onClick={e => { e.stopPropagation(); setHiddenCols(prev => { const n = new Set(prev); if (n.has('chargeDesc')) n.delete('chargeDesc'); else n.add('chargeDesc'); return n }) }}
-                                  className="ml-1 text-[9px] font-bold opacity-60 hover:opacity-100"
-                                  title={hiddenCols.has('chargeDesc') ? 'Show Charge Description' : 'Hide Charge Description'}
-                                >{hiddenCols.has('chargeDesc') ? '\u25B6' : '\u25C0'}</button>
-                              )}
                               {(() => {
                                 const idx = sortStack.findIndex(s => s.colId === col.id)
                                 if (idx === -1) return null
@@ -2442,6 +2434,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                 )
                               })()}
                             </span>
+                            {/* CDM expand/collapse toggle — always visible */}
+                            {col.id === 'charge' && (
+                              <button
+                                onPointerDown={e => e.stopPropagation()}
+                                onClick={e => { e.stopPropagation(); setHiddenCols(prev => { const n = new Set(prev); if (n.has('chargeDesc')) n.delete('chargeDesc'); else n.add('chargeDesc'); return n }) }}
+                                className="absolute right-7 top-0 bottom-0 w-4 flex items-center justify-center text-[9px] font-bold text-[#316AC5] hover:bg-[#316AC5]/20 z-10"
+                                title={hiddenCols.has('chargeDesc') ? 'Show Charge Description' : 'Hide Charge Description'}
+                              >{hiddenCols.has('chargeDesc') ? '\u25B6' : '\u25C0'}</button>
+                            )}
                             {/* Filter button */}
                             <button
                               className={`absolute right-2 top-0 bottom-0 w-4 flex items-center justify-center text-[10px] hover:bg-[#316AC5]/20 z-10 ${isFiltered ? 'text-[#316AC5]' : 'text-[#A0A0A0]'}`}
