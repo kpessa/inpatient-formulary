@@ -21,6 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import type { FormularyItem, DrugCategory, CategoryRule, CategoryExclusion, SearchFilterGroup, DesignPattern, LinterViolation } from "@/lib/types"
 import type { SearchResult } from "@/app/api/formulary/search/route"
+import type { CdmUnbuiltResult } from "@/lib/db"
 import type { DomainValue } from "@/lib/formulary-diff"
 import { computeLintViolations } from "@/lib/linter"
 import { RecentSearchDropdown } from "./RecentSearchDropdown"
@@ -107,6 +108,13 @@ const DOMAIN_PRIORITY: Record<string, number> = {
 function getDomainKey(r: SearchResult): string { return `${r.region}_${r.environment}` }
 function getDomainPriority(r: SearchResult): number { return DOMAIN_PRIORITY[getDomainKey(r)] ?? 99 }
 function isProd(r: SearchResult): boolean { return r.environment === 'prod' }
+function getDoseForm(r: SearchResult): string {
+  const s = [r.dispenseStrength, r.dispenseStrengthUnit].filter(Boolean).join(' ')
+  const v = r.dispenseVolume && r.dispenseVolume !== '0' ? [r.dispenseVolume, r.dispenseVolumeUnit].filter(Boolean).join(' ') : ''
+  if (s || v) return v ? `${s} / ${v}` : s
+  return [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(' ')
+}
+
 function getSemanticKey(r: SearchResult): string {
   if (r.pyxisId?.trim())      return `pyxis:${r.pyxisId.trim()}`
   if (r.chargeNumber?.trim()) return `charge:${r.chargeNumber.trim()}`
@@ -134,7 +142,8 @@ function computeDiffCols(variants: UnifiedResult[]): Set<string> {
   const checks: [string, (r: UnifiedResult) => string][] = [
     ['description', r => r.description],
     ['generic',     r => r.genericName],
-    ['strength',    r => `${r.strength}|${r.strengthUnit}|${r.dosageForm}`],
+    ['strength',    r => `${r.dispenseStrength}|${r.dispenseStrengthUnit}|${r.dispenseVolume}|${r.dispenseVolumeUnit}`],
+    ['form',        r => r.dosageForm],
     ['mnemonic',    r => r.mnemonic],
     ['charge',      r => r.chargeNumber],
     ['brand',       r => r.brandName],
@@ -162,9 +171,11 @@ function getFieldValue(r: UnifiedResult, colId: string): string {
   switch (colId) {
     case 'description': return r.description ?? ''
     case 'generic':     return r.genericName ?? ''
-    case 'strength':    return [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(' ')
+    case 'strength':    return getDoseForm(r)
+    case 'form':        return r.dosageForm ?? ''
     case 'mnemonic':    return r.mnemonic ?? ''
     case 'charge':      return r.chargeNumber ?? ''
+    case 'chargeDesc':  return r.cdmDescription ?? ''
     case 'brand':       return r.brandName ?? ''
     case 'pyxis':       return r.pyxisId ?? ''
     default:            return ''
@@ -932,6 +943,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldStatus>>({})
   // Results state
   const [results, setResults] = useState<SearchResult[]>([])
+  const [cdmUnbuilt, setCdmUnbuilt] = useState<CdmUnbuiltResult[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isExpanding, setIsExpanding] = useState(false)
   const [isSelecting, setIsSelecting] = useState(false)
@@ -959,17 +971,20 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
   // Columns: unified label + width, order is mutable
   const [cols, setCols] = useState([
-    { id: "domain",      label: "Domain",             width: 90,  align: 'center' as const },
-    { id: "order",       label: "Type",               width: 90,  align: 'center' as const },
-    { id: "facility",    label: "Facility",           width: 100, align: 'left'   as const },
-    { id: "charge",      label: "CDM",                width: 100, align: 'center' as const },
-    { id: "pyxis",       label: "Med ID",             width: 120, align: 'center' as const },
-    { id: "mnemonic",    label: "Mnemonic",           width: 90,  align: 'center' as const },
+    { id: "domain",      label: "Domain",             width: 70,  align: 'center' as const },
+    { id: "order",       label: "Type",               width: 40,  align: 'center' as const },
+    { id: "facility",    label: "Facility",           width: 90,  align: 'left'   as const },
+    { id: "charge",      label: "CDM",                width: 80,  align: 'center' as const },
+    { id: "chargeDesc",  label: "Charge Desc",        width: 180, align: 'left'   as const },
+    { id: "pyxis",       label: "Med ID",             width: 60,  align: 'center' as const },
     { id: "generic",     label: "Generic Name",       width: 140, align: 'left'   as const },
-    { id: "strength",    label: "Strength / Form",    width: 110, align: 'left'   as const },
-    { id: "description", label: "Description",        width: 160, align: 'left'   as const },
+    { id: "strength",    label: "Strength / Vol",     width: 100, align: 'center' as const },
+    { id: "form",        label: "Form",               width: 60,  align: 'center' as const },
+    { id: "description", label: "Description",        width: 220, align: 'left'   as const },
     { id: "brand",       label: "Brand Name",         width: 100, align: 'left'   as const },
   ])
+  const [hiddenCols, setHiddenCols] = useState(new Set(['chargeDesc']))
+  const visibleCols = useMemo(() => cols.filter(c => !hiddenCols.has(c.id)), [cols, hiddenCols])
   const resizingCol = useRef<{ idx: number; startX: number; startWidth: number } | null>(null)
   // Drag-to-reorder
   const [colDrag, setColDrag] = useState<{ from: number; to: number } | null>(null)
@@ -979,7 +994,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const tableRef = useRef<HTMLTableElement | null>(null)
 
   // Column filter state
-  const [colFilters, setColFilters] = useState<Record<string, { text: string; selected: Set<string> }>>({})
+  const [colFilters, setColFilters] = useState<Record<string, { text: string; selected: Set<string>; selected2?: Set<string> }>>({})
   const [filterPanel, setFilterPanel] = useState<{ colId: string; x: number; y: number } | null>(null)
   const [filterPanelSearch, setFilterPanelSearch] = useState("")
   const filterPanelRef = useRef<HTMLDivElement | null>(null)
@@ -1079,6 +1094,9 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       setIsMaximized(true)
       const w = Math.min(window.innerWidth, 1400)
       setRect({ x: (window.innerWidth - w) / 2, y: 0, w, h: window.innerHeight })
+      setTimeout(() => {
+        cols.forEach(col => { if (!hiddenCols.has(col.id) && !['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) })
+      }, 50)
     }
   }
 
@@ -1086,7 +1104,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   useEffect(() => {
     if (!isMaximized) return
     const id = requestAnimationFrame(() => {
-      cols.forEach((col, i) => { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(i) })
+      cols.forEach(col => { if (!hiddenCols.has(col.id) && !['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) })
     })
     return () => cancelAnimationFrame(id)
   }, [isMaximized])
@@ -1249,8 +1267,12 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     return () => document.removeEventListener("mousedown", handleMouseDown)
   }, [filterPanel])
 
-  const autoFitColumn = (colIdx: number) => {
-    if (!tableRef.current) return
+  const autoFitColumn = (colId: string) => {
+    const colIdx = cols.findIndex(c => c.id === colId)
+    if (colIdx === -1 || !tableRef.current || hiddenCols.has(colId)) return
+
+    // DOM index among visible columns only
+    const domIdx = cols.slice(0, colIdx + 1).filter(c => !hiddenCols.has(c.id)).length - 1
 
     // Create a hidden probe span to measure text at the exact font used in cells
     const probe = document.createElement('span')
@@ -1276,7 +1298,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
 
     // Measure every visible body cell in this column
     tableRef.current.querySelectorAll('tbody tr').forEach(row => {
-      const cell = row.querySelectorAll('td')[colIdx + 1] // +1 skips the icon column
+      const cell = row.querySelectorAll('td')[domIdx + 1] // +1 skips the icon column
       if (!cell) return
       probe.textContent = cell.textContent ?? ''
       // 16px cell padding + 4px buffer
@@ -1306,6 +1328,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     setElapsedSec(null)
     setFieldStatus({})
     setExcludedKeys(new Set())  // clear exclusions on new search
+    setCdmUnbuilt([])
     setExclusionPayloads(new Map())
     setUnresolvedExclusions([])
     const parsed = parseAdvancedQuery(query)
@@ -1473,11 +1496,13 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
         const fieldResults: Record<string, SearchResult[]> = {}
 
         // Fire all field requests in parallel; update UI as each resolves
+        let cdmUnbuiltSet = false
         const fieldPromises = [...fieldsToQuery].map(field => {
           const fp = new URLSearchParams([...baseParams.entries(), ['fields', field]])
           return fetch(`/api/formulary/search?${fp}`)
-            .then(r => r.json() as Promise<{ fields: Record<string, SearchResult[]>; ms: number }>)
-            .then(({ fields, ms }) => {
+            .then(r => r.json() as Promise<{ fields: Record<string, SearchResult[]>; ms: number; cdmUnbuilt?: CdmUnbuiltResult[] }>)
+            .then(({ fields, ms, cdmUnbuilt: unbuilt }) => {
+              if (unbuilt && unbuilt.length > 0 && !cdmUnbuiltSet) { setCdmUnbuilt(unbuilt); cdmUnbuiltSet = true }
               const results = fields[field] ?? []
               fieldResults[field] = results
               setResults(prev => {
@@ -1525,6 +1550,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
             if (!line.trim()) continue
             const chunk = JSON.parse(line)
             if ('results' in chunk) { finalResults = chunk.results; finalTotal = chunk.total }
+            else if ('cdmUnbuilt' in chunk) { setCdmUnbuilt(chunk.cdmUnbuilt) }
             else if ('total' in chunk) { setPendingTotal(chunk.total) }
           }
           if (done) break outer
@@ -1551,10 +1577,12 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       case 'order':       return [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].filter(Boolean).join('')
       case 'facility':    return r.activeFacilities.join(', ')
       case 'charge':      return r.chargeNumber
+      case 'chargeDesc':  return r.cdmDescription ?? ''
       case 'pyxis':       return r.pyxisId
       case 'mnemonic':    return r.mnemonic
       case 'generic':     return r.genericName
-      case 'strength':    return [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(' ').trim()
+      case 'strength':    return getDoseForm(r).trim()
+      case 'form':        return r.dosageForm
       case 'description': return r.description
       case 'brand':       return r.brandName
       default:            return ''
@@ -1705,16 +1733,18 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       case "order":       return [r.searchMedication ? 'M' : '', r.searchIntermittent ? 'I' : '', r.searchContinuous ? 'C' : ''].join('')
       case "facility":    return String(r.activeFacilities.filter(f => !CORP_FACILITIES.has(f)).length).padStart(4, '0')
       case "charge":      return r.chargeNumber
+      case "chargeDesc":  return r.cdmDescription ?? ''
       case "pyxis":       return r.pyxisId
       case "mnemonic":    return r.mnemonic
       case "generic":     return r.genericName
       case "strength": {
-        const str = `${r.strength} ${r.strengthUnit} ${r.dosageForm}`.trim()
+        const str = getDoseForm(r)
         const match = str.replace(/,(\d)/g, '$1').match(/(\d+(?:\.\d+)?)/)
         const num = match ? parseFloat(match[1]) : 0
         const [intPart, decPart] = num.toFixed(4).split('.')
         return intPart.padStart(8, '0') + '.' + decPart
       }
+      case "form":        return r.dosageForm
       case "description": return r.description
       case "brand":       return r.brandName
       default:            return ""
@@ -1722,7 +1752,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   }
 
   const getFilterKey = (r: SearchResult, colId: string): string => {
-    if (colId === 'strength') return r.dosageForm
+    if (colId === 'form') return r.dosageForm
+    if (colId === 'strength') return getDoseForm(r)
     if (colId === 'facility') {
       const rf = r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
       if (rf.length === 0) return r.activeFacilities.length > 0 ? 'corp only' : ''
@@ -1742,6 +1773,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     if (activeFilters.length === 0) return statusFiltered
     return statusFiltered.filter(r =>
       activeFilters.every(([colId, filter]) => {
+        // Strength/Vol: dual filter on strength values + volume values independently
+        if (colId === 'strength') {
+          const sVal = [r.dispenseStrength, r.dispenseStrengthUnit].filter(Boolean).join(' ')
+          const vVal = r.dispenseVolume && r.dispenseVolume !== '0'
+            ? [r.dispenseVolume, r.dispenseVolumeUnit].filter(Boolean).join(' ') : ''
+          const sPass = (filter.selected?.size ?? 0) === 0 || filter.selected.has(sVal)
+          const vPass = (filter.selected2?.size ?? 0) === 0 || filter.selected2.has(vVal)
+          return sPass && vPass
+        }
         const cellVal = colId === 'facility'
           ? r.activeFacilities.filter(f => !CORP_FACILITIES.has(f)).join(' ').toLowerCase()
           : getSortValue(r, colId).toLowerCase()
@@ -1842,6 +1882,19 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
   const fpFilter = filterPanel
     ? (colFilters[filterPanel.colId] ?? { text: "", selected: new Set<string>() })
     : null
+
+  // Strength/Vol dual filter lists
+  const numSort = (a: string, b: string) => {
+    const na = parseFloat(a.replace(/[^\d.]/g, '')) || 0
+    const nb = parseFloat(b.replace(/[^\d.]/g, '')) || 0
+    return na - nb || a.localeCompare(b)
+  }
+  const fpStrengthValues = filterPanel?.colId === 'strength'
+    ? [...new Set(results.map(r => [r.dispenseStrength, r.dispenseStrengthUnit].filter(Boolean).join(' ')).filter(Boolean))].sort(numSort)
+    : []
+  const fpVolumeValues = filterPanel?.colId === 'strength'
+    ? [...new Set(results.map(r => r.dispenseVolume && r.dispenseVolume !== '0' ? [r.dispenseVolume, r.dispenseVolumeUnit].filter(Boolean).join(' ') : '').filter(Boolean))].sort(numSort)
+    : []
   const fpAllValues = filterPanel
     ? filterPanel.colId === 'facility'
       ? [...new Set(results.flatMap(r => r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))))].sort()
@@ -1968,9 +2021,17 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     inputClassName="flex-1 text-xs font-sans rounded-none border"
                   />
                   <button
-                    onClick={() => { setSearchValue(''); setInputValue(''); setQueryState(null) }}
-                    className={`h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default ${searchValue || inputValue ? '' : 'invisible pointer-events-none'}`}
-                    title="Clear search (Esc)"
+                    onClick={() => {
+                      setSearchValue(''); setInputValue(''); setQueryState(null)
+                      setResults([]); setTotal(0); setQueryMs(null); setGroupCategories({}); setCdmUnbuilt([])
+                      setAdvFilter({ tcItems: [], dfItems: [], rtItems: [], dcItems: [] })
+                      setCategoryFilter(''); setCategorySearchActive(false)
+                      setExcludedKeys(new Set()); setExclusionPayloads(new Map()); setUnresolvedExclusions([]); setExclusionPanelOpen(false)
+                      setLastParsedQuery(null); setColFilters({}); setViolationFilter(null)
+                      setShowAdvanced(false); setSelectedResultIdx(null)
+                    }}
+                    className={`h-5 w-4 flex items-center justify-center text-[10px] text-[#808080] bg-[#D4D0C8] border border-t-white border-l-white border-b-[#808080] border-r-[#808080] hover:text-black active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white shrink-0 cursor-default ${searchValue || inputValue || results.length > 0 || advActiveCount > 0 ? '' : 'invisible pointer-events-none'}`}
+                    title="Clear all"
                     tabIndex={-1}
                   >
                     ✕
@@ -2019,7 +2080,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   Unified
                 </label>
                 <button
-                  onClick={() => cols.forEach((col, i) => { if (!['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(i) })}
+                  onClick={() => cols.forEach(col => { if (!hiddenCols.has(col.id) && !['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) })}
                   className="h-5 px-2 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] text-xs shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
                   title="Fit all columns to content"
                 >
@@ -2328,15 +2389,16 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 <table ref={tableRef} className="table-fixed w-max text-left border-collapse whitespace-nowrap">
                   <colgroup>
                     <col style={{ width: 24 }} />
-                    {cols.map((c) => <col key={c.id} style={{ width: c.width }} />)}
+                    {visibleCols.map((c) => <col key={c.id} style={{ width: c.width }} />)}
                   </colgroup>
                   <thead className="bg-[#EAEAEA] sticky top-0 z-10 border-b border-[#808080]">
                     <tr>
                       <th className="border-r border-b border-[#C0C0C0] px-1 font-normal text-center bg-gradient-to-b from-white to-[#EAEAEA] shadow-[inset_-1px_-1px_0_#A0A0A0]"></th>
                       {cols.map((col, i) => {
+                        if (hiddenCols.has(col.id)) return null
                         const isDragging = colDrag?.from === i
                         const isDropTarget = colDrag !== null && colDrag.to === i && colDrag.from !== i
-                        const isFiltered = !!(colFilters[col.id] && (colFilters[col.id].text || (colFilters[col.id].selected?.size ?? 0) > 0))
+                        const isFiltered = !!(colFilters[col.id] && (colFilters[col.id].text || (colFilters[col.id].selected?.size ?? 0) > 0 || (colFilters[col.id].selected2?.size ?? 0) > 0))
                         return (
                           <th
                             key={col.id}
@@ -2360,6 +2422,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                               }}
                             >
                               {col.label}
+                              {col.id === 'charge' && (
+                                <button
+                                  onPointerDown={e => e.stopPropagation()}
+                                  onClick={e => { e.stopPropagation(); setHiddenCols(prev => { const n = new Set(prev); if (n.has('chargeDesc')) n.delete('chargeDesc'); else n.add('chargeDesc'); return n }) }}
+                                  className="ml-1 text-[9px] font-bold opacity-60 hover:opacity-100"
+                                  title={hiddenCols.has('chargeDesc') ? 'Show Charge Description' : 'Hide Charge Description'}
+                                >{hiddenCols.has('chargeDesc') ? '\u25B6' : '\u25C0'}</button>
+                              )}
                               {(() => {
                                 const idx = sortStack.findIndex(s => s.colId === col.id)
                                 if (idx === -1) return null
@@ -2401,7 +2471,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                               onDoubleClick={(e) => {
                                 e.preventDefault()
                                 e.stopPropagation()
-                                autoFitColumn(i)
+                                autoFitColumn(col.id)
                               }}
                             />
                           </th>
@@ -2412,14 +2482,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                   <tbody>
                     {results.length === 0 && !isLoading ? (
                       <tr key="empty">
-                        <td colSpan={cols.length + 1} className="px-2 py-1 text-center text-[#808080]">
+                        <td colSpan={visibleCols.length + 1} className="px-2 py-1 text-center text-[#808080]">
                           {queryMs !== null ? "No results found." : "Enter a search term and click Search."}
                         </td>
                       </tr>
                     ) : (
                       displayedResults.map((r, idx) => {
                         const isSelected = selectedResultIdx === idx
-                        const strengthForm = [r.strength, r.strengthUnit, r.dosageForm].filter(Boolean).join(" ").trim()
+                        const strengthForm = getDoseForm(r)
                         const realFacs = r.activeFacilities.filter(f => !CORP_FACILITIES.has(f))
                         const facCount = realFacs.length
                         const facDisplay = facCount === 0 ? "" : facCount === 1 ? realFacs[0] : "Multiple"
@@ -2557,7 +2627,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                 )}
                               </div>
                             </td>
-                            {cols.map(col => {
+                            {visibleCols.map(col => {
                               const pDiff = !isSelected && parentDiffCols.has(col.id)
                               const pLintField = COL_TO_LINT_FIELD[col.id]
                               const pLintViols = pLintField ? parentLintViolations.get(pLintField) : undefined
@@ -2643,15 +2713,58 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                               />
                                             ))}
                                           </div>
-                                          <div className="hidden group-hover:block absolute left-full top-2 ml-1 bg-[#FFFFE1] border border-black p-1 shadow z-[9999] min-w-[140px] text-black text-xs whitespace-nowrap">
-                                            <div className="font-bold mb-0.5 border-b border-[#C0C0C0] pb-0.5">{uniFacCount} facilities</div>
-                                            {facBars.map(({ fac, region, env }) => (
-                                              <div key={fac} className="flex items-center gap-1">
-                                                <span style={{ background: getDomainColor(region, env).bg }} className="w-2 h-2 rounded-[1px] inline-block shrink-0" />
-                                                {fac}
+                                          {(() => {
+                                            const regions = ['west', 'central', 'east'] as const
+                                            const byRegion = new Map<string, string[]>()
+                                            for (const fb of facBars) {
+                                              const list = byRegion.get(fb.region) ?? []
+                                              list.push(fb.fac)
+                                              byRegion.set(fb.region, list)
+                                            }
+                                            const activeRegions = regions.filter(r => (byRegion.get(r)?.length ?? 0) > 0)
+                                            const tooltipKey = getSemanticKey(r)
+                                            return (
+                                              <div
+                                                className="hidden group-hover:block absolute left-full top-0 -ml-2 pl-2 z-[9999]"
+                                              >
+                                              <div
+                                                className="bg-[#FFFFE1] border border-black shadow min-w-[160px] text-black text-xs whitespace-nowrap"
+                                                data-fac-tooltip={tooltipKey}
+                                              >
+                                                {/* Tab bar */}
+                                                <div className="flex border-b border-[#C0C0C0]">
+                                                  {activeRegions.map(reg => {
+                                                    const { bg, text: txt } = getDomainColor(reg, 'prod')
+                                                    const count = byRegion.get(reg)?.length ?? 0
+                                                    return (
+                                                      <button
+                                                        key={reg}
+                                                        className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide border-r border-[#C0C0C0] last:border-r-0 peer"
+                                                        style={{ background: bg, color: txt }}
+                                                        onMouseEnter={e => {
+                                                          const tooltip = (e.currentTarget as HTMLElement).closest(`[data-fac-tooltip]`)
+                                                          tooltip?.querySelectorAll('[data-fac-region]').forEach(el => {
+                                                            (el as HTMLElement).style.display = el.getAttribute('data-fac-region') === reg ? '' : 'none'
+                                                          })
+                                                        }}
+                                                      >
+                                                        {reg[0].toUpperCase()} ({count})
+                                                      </button>
+                                                    )
+                                                  })}
+                                                </div>
+                                                {/* Region panels — first one visible, rest hidden */}
+                                                {activeRegions.map((reg, i) => (
+                                                  <div key={reg} data-fac-region={reg} style={{ display: i === 0 ? '' : 'none' }}>
+                                                    {(byRegion.get(reg) ?? []).sort((a, b) => a.localeCompare(b)).map(fac => (
+                                                      <div key={fac} className="px-2 py-px text-[10px]">{fac}</div>
+                                                    ))}
+                                                  </div>
+                                                ))}
                                               </div>
-                                            ))}
-                                          </div>
+                                              </div>
+                                            )
+                                          })()}
                                         </>
                                       )}
                                     </td>
@@ -2688,6 +2801,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                 case "mnemonic":
                                 case "generic":
                                 case "strength":
+                                case "form":
                                 case "description":
                                 case "brand": {
                                   const pLintH = pLint && pLintViols ? {
@@ -2701,10 +2815,13 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                     : col.id === 'mnemonic' ? cellWithTask('mnemonic', r.mnemonic)
                                     : col.id === 'generic' ? cellWithTask('generic', r.genericName)
                                     : col.id === 'strength' ? cellWithTask('strength', strengthForm)
+                                    : col.id === 'form' ? r.dosageForm
                                     : col.id === 'description' ? cellWithTask('description', r.description)
                                     : cellWithTask('brand', r.brandName)
                                   return <td key={col.id} className="px-2 py-0.5 max-w-0" style={{ ...pDiffStyle, textAlign: col.align }} {...pLintH}>{content}</td>
                                 }
+                                case "chargeDesc":
+                                  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align }}>{r.cdmDescription ?? ''}</td>
                                 default:            return <td key={col.id} />
                               }
                             })}
@@ -2729,7 +2846,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                 const nonProdForRegion = variants.filter(nv => nv.region === vreg && !isProd(nv))
                                 const regionKey = `${getSemanticKey(r)}:${vreg}`
                                 const isRegionExpanded = expandedRegions.has(regionKey)
-                                const vStrengthForm = [v.strength, v.strengthUnit, v.dosageForm].filter(Boolean).join(' ')
+                                const vStrengthForm = getDoseForm(v)
 
                                 const prodRow = (
                                   <tr key={`${v.groupId}-${dk}-l1`}
@@ -2747,7 +2864,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                         </button>
                                       )}
                                     </td>
-                                    {cols.map(col => {
+                                    {visibleCols.map(col => {
                                       const isDiff = diffCols.has(col.id)
                                       const lintField = COL_TO_LINT_FIELD[col.id]
                                       const colLintViolations = lintField ? lintMaps.get(v.groupId)?.get(lintField) : undefined
@@ -2781,8 +2898,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                         case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.description}</td>
                                         case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.genericName}</td>
                                         case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{vStrengthForm}</td>
+                                        case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>{v.dosageForm}</td>
                                         case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.mnemonic}</td>
                                         case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.chargeNumber}</td>
+                                        case 'chargeDesc':  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }}>{v.cdmDescription ?? ''}</td>
                                         case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.brandName}</td>
                                         case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...cellStyle, textAlign: col.align }} {...lintHandlers}>{v.pyxisId}</td>
                                         case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...cellStyle, textAlign: col.align }}>{[v.searchMedication && 'Med', v.searchIntermittent && 'Int', v.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
@@ -2811,7 +2930,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                   const ndk = getDomainKey(nv)
                                   const [, nenv] = ndk.split('_')
                                   const { bg: nbg, text: ntext, border: nborder } = getDomainColor(vreg, nenv)
-                                  const nvStrengthForm = [nv.strength, nv.strengthUnit, nv.dosageForm].filter(Boolean).join(' ')
+                                  const nvStrengthForm = getDoseForm(nv)
                                   return (
                                     <tr key={`${nv.groupId}-${ndk}-l2`}
                                       className="border-b border-[#E8E8E8] text-[11px]"
@@ -2823,7 +2942,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                           {getDomainBadge(vreg, nenv)}
                                         </span>
                                       </td>
-                                      {cols.map(col => {
+                                      {visibleCols.map(col => {
                                         const isDiff = nonProdDiffCols.has(col.id)
                                         const diffStyle = isDiff ? { background: '#FFF3CD', borderBottom: '1px solid #F59E0B' } : {}
                                         switch (col.id) {
@@ -2837,8 +2956,10 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                           case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.description}</td>
                                           case 'generic':     return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.genericName}</td>
                                           case 'strength':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nvStrengthForm}</td>
+                                          case 'form':        return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.dosageForm}</td>
                                           case 'mnemonic':    return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.mnemonic}</td>
                                           case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{nv.chargeNumber}</td>
+                                          case 'chargeDesc':  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.cdmDescription ?? ''}</td>
                                           case 'brand':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.brandName}</td>
                                           case 'pyxis':       return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ ...diffStyle, textAlign: col.align }}>{nv.pyxisId}</td>
                                           case 'order':       return <td key={col.id} className="px-2 py-0.5" style={{ ...diffStyle, textAlign: col.align }}>{[nv.searchMedication && 'Med', nv.searchIntermittent && 'Int', nv.searchContinuous && 'Cont'].filter(Boolean).join('/')}</td>
@@ -2867,6 +2988,32 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                           : null
                         return childRows ? <Fragment key={`${r.groupId}-${idx}-group`}>{parentRow}{childRows}</Fragment> : parentRow
                       })
+                    )}
+                    {/* Unbuilt CDM rows — CDM entries with no Cerner product */}
+                    {cdmUnbuilt.length > 0 && (
+                      <>
+                        <tr>
+                          <td colSpan={visibleCols.length + 1} className="px-2 py-1 text-[10px] font-mono font-bold text-[#C04000] bg-[#FFF8F0] border-t-2 border-[#F97316]">
+                            NOT BUILT — {cdmUnbuilt.length} CDM{cdmUnbuilt.length !== 1 ? 's' : ''} with no Cerner product
+                          </td>
+                        </tr>
+                        {cdmUnbuilt.map(cdm => (
+                          <tr key={`cdm-${cdm.cdmCode}`} className="bg-[#FFFAF0] border-b border-[#F0E8D8] text-[#806030]">
+                            <td className="px-0.5 py-0 text-center">
+                              <span className="text-[8px] bg-[#F97316] text-white px-1 py-px rounded-sm">CDM</span>
+                            </td>
+                            {visibleCols.map(col => {
+                              switch (col.id) {
+                                case 'charge':      return <td key={col.id} className="px-2 py-0.5" style={{ textAlign: col.align }}>{cdm.cdmCode}</td>
+                                case 'chargeDesc':  return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align }}>{cdm.techDesc || cdm.description}</td>
+                                case 'description': return <td key={col.id} className="px-2 py-0.5 truncate max-w-0 overflow-hidden" style={{ textAlign: col.align }}>{cdm.techDesc || cdm.description}</td>
+                                case 'brand':       return <td key={col.id} className="px-2 py-0.5" style={{ textAlign: col.align }}>{cdm.procCode && cdm.procCode !== '-' && cdm.procCode !== 'XXXXX' ? cdm.procCode : ''}</td>
+                                default:            return <td key={col.id} className="px-2 py-0.5" style={{ textAlign: col.align }} />
+                              }
+                            })}
+                          </tr>
+                        ))}
+                      </>
                     )}
                   </tbody>
                 </table>
@@ -3260,6 +3407,84 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     className="bg-[#F0F0F0] border border-[#808080] shadow-[2px_2px_4px_rgba(0,0,0,0.4)] text-xs font-sans"
                     onMouseDown={e => e.stopPropagation()}
                   >
+                    {filterPanel.colId === 'strength' ? (
+                      /* Dual filter: Strength + Volume side by side */
+                      <>
+                      <div className="flex gap-1 p-1.5 border-b border-[#C0C0C0]">
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="Strength..."
+                          value={filterPanelSearch.split('||')[0] ?? ''}
+                          onChange={e => {
+                            const parts = filterPanelSearch.split('||')
+                            setFilterPanelSearch(`${e.target.value}||${parts[1] ?? ''}`)
+                          }}
+                          className="flex-1 min-w-0 h-5 px-1 border border-[#808080] bg-white text-xs font-sans shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus:outline-none"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Volume..."
+                          value={filterPanelSearch.split('||')[1] ?? ''}
+                          onChange={e => {
+                            const parts = filterPanelSearch.split('||')
+                            setFilterPanelSearch(`${parts[0] ?? ''}||${e.target.value}`)
+                          }}
+                          className="flex-1 min-w-0 h-5 px-1 border border-[#808080] bg-white text-xs font-sans shadow-[inset_1px_1px_2px_rgba(0,0,0,0.2)] focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex max-h-64">
+                        {/* Strength column */}
+                        <div className="flex-1 border-r border-[#C0C0C0] overflow-y-auto">
+                          <div className="px-2 py-0.5 text-[9px] font-bold text-[#505050] bg-[#D4D0C8] uppercase tracking-wide border-b border-[#C0C0C0] sticky top-0">
+                            Strength ({fpFilter?.selected?.size || 0})
+                          </div>
+                          {fpStrengthValues.filter(v => { const s = filterPanelSearch.split('||')[0]?.toLowerCase(); return !s || v.toLowerCase().includes(s) }).map(val => (
+                            <div
+                              key={`s-${val}`}
+                              className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer hover:bg-[#E8F0FE]"
+                              onClick={() => {
+                                setColFilters(prev => {
+                                  const f = prev.strength ?? { text: "", selected: new Set<string>() }
+                                  const next = new Set(f.selected)
+                                  if (next.has(val)) next.delete(val); else next.add(val)
+                                  return { ...prev, strength: { ...f, selected: next } }
+                                })
+                              }}
+                            >
+                              <input type="checkbox" checked={fpFilter?.selected?.has(val) ?? false} readOnly className="w-3 h-3 cursor-pointer" />
+                              <span className="truncate text-[10px]">{val}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Volume column */}
+                        <div className="flex-1 overflow-y-auto">
+                          <div className="px-2 py-0.5 text-[9px] font-bold text-[#505050] bg-[#D4D0C8] uppercase tracking-wide border-b border-[#C0C0C0] sticky top-0">
+                            Volume ({fpFilter?.selected2?.size || 0})
+                          </div>
+                          {fpVolumeValues.filter(v => { const s = filterPanelSearch.split('||')[1]?.toLowerCase(); return !s || v.toLowerCase().includes(s) }).map(val => (
+                            <div
+                              key={`v-${val}`}
+                              className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer hover:bg-[#E8F0FE]"
+                              onClick={() => {
+                                setColFilters(prev => {
+                                  const f = prev.strength ?? { text: "", selected: new Set<string>() }
+                                  const next2 = new Set(f.selected2 ?? new Set<string>())
+                                  if (next2.has(val)) next2.delete(val); else next2.add(val)
+                                  return { ...prev, strength: { ...f, selected2: next2 } }
+                                })
+                              }}
+                            >
+                              <input type="checkbox" checked={fpFilter?.selected2?.has(val) ?? false} readOnly className="w-3 h-3 cursor-pointer" />
+                              <span className="truncate text-[10px]">{val}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      </>
+                    ) : (
+                      /* Standard single filter */
+                      <>
                     <div className="p-1.5 border-b border-[#C0C0C0]">
                       <input
                         autoFocus
@@ -3308,6 +3533,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         </div>
                       ))}
                     </div>
+                      </>
+                    )}
                     <div className="flex justify-end gap-1 p-1.5 border-t border-[#C0C0C0]">
                       <button
                         onClick={() => {

@@ -46,6 +46,21 @@ export interface SearchResult {
   searchMedication: boolean
   searchContinuous: boolean
   searchIntermittent: boolean
+  dispenseStrength: string
+  dispenseStrengthUnit: string
+  dispenseVolume: string
+  dispenseVolumeUnit: string
+  cdmDescription?: string
+  cdmProcCode?: string
+}
+
+export interface CdmUnbuiltResult {
+  cdmCode: string
+  description: string
+  techDesc: string
+  procCode: string
+  revCode: string
+  divisor: string
 }
 
 export interface AdvancedFilters {
@@ -246,7 +261,8 @@ export async function searchFormulary({
       { sql: `SELECT COUNT(*) AS cnt FROM formulary_groups ${where}`, args: sqlArgs },
       { sql: `SELECT group_id, description, generic_name, strength, strength_unit,
                      dosage_form, mnemonic, status, charge_number, brand_name,
-                     formulary_status, pyxis_id, region, environment
+                     formulary_status, pyxis_id, region, environment,
+                     dispense_strength, dispense_strength_unit, dispense_volume, dispense_volume_unit
               FROM formulary_groups ${where} LIMIT ?`,
         args: [...sqlArgs, AUTO_FETCH_MAX] },
     ], 'read')
@@ -317,10 +333,16 @@ function mapRow(row: Row): SearchResult {
     pyxisId: row.pyxis_id as string,
     region: row.region as string,
     environment: row.environment as string,
+    dispenseStrength: (row.dispense_strength as string) ?? '',
+    dispenseStrengthUnit: (row.dispense_strength_unit as string) ?? '',
+    dispenseVolume: (row.dispense_volume as string) ?? '',
+    dispenseVolumeUnit: (row.dispense_volume_unit as string) ?? '',
     activeFacilities: [],
     searchMedication: false,
     searchContinuous: false,
     searchIntermittent: false,
+    cdmDescription: undefined,
+    cdmProcCode: undefined,
   }
 }
 
@@ -346,6 +368,53 @@ export async function searchByPyxisIds(
     args,
   })
   return rows.map(mapRow)
+}
+
+// Batch-enrich SearchResults with CDM data
+export async function enrichWithCdm(results: SearchResult[]): Promise<void> {
+  const charges = [...new Set(results.map(r => r.chargeNumber).filter(Boolean))]
+  if (charges.length === 0) return
+  const db = getDb()
+  // Batch in chunks of 100
+  for (let i = 0; i < charges.length; i += 100) {
+    const chunk = charges.slice(i, i + 100)
+    const ph = chunk.map(() => '?').join(',')
+    const { rows } = await db.execute({
+      sql: `SELECT cdm_code, tech_desc, proc_code FROM cdm_master WHERE cdm_code IN (${ph})`,
+      args: chunk,
+    })
+    const map = new Map(rows.map(r => [r.cdm_code as string, { desc: r.tech_desc as string, proc: r.proc_code as string }]))
+    for (const r of results) {
+      const cdm = map.get(r.chargeNumber)
+      if (cdm) { r.cdmDescription = cdm.desc; r.cdmProcCode = cdm.proc || undefined }
+    }
+  }
+}
+
+// Search CDM master for unbuilt entries (no matching formulary product)
+export async function searchCdmUnbuilt(q: string, limit = 50): Promise<CdmUnbuiltResult[]> {
+  if (!q || q === '*') return []
+  const db = getDb()
+  const lowerQ = q.toLowerCase()
+  const isWildcard = lowerQ.includes('*')
+  const likeQ = isWildcard ? lowerQ.replace(/\*/g, '%') : `%${lowerQ}%`
+
+  const { rows } = await db.execute({
+    sql: `SELECT cm.cdm_code, cm.description, cm.tech_desc, cm.proc_code, cm.rev_code, cm.divisor
+          FROM cdm_master cm
+          WHERE NOT EXISTS (SELECT 1 FROM formulary_groups fg WHERE fg.charge_number = cm.cdm_code)
+            AND (LOWER(cm.description) LIKE ? OR cm.cdm_code LIKE ?)
+          LIMIT ?`,
+    args: [likeQ, likeQ, limit],
+  })
+  return rows.map(r => ({
+    cdmCode: r.cdm_code as string,
+    description: r.description as string,
+    techDesc: r.tech_desc as string,
+    procCode: r.proc_code as string,
+    revCode: r.rev_code as string,
+    divisor: r.divisor as string,
+  }))
 }
 
 export interface FieldSearchParams {
@@ -375,7 +444,8 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
       sql: `SELECT DISTINCT fg.group_id, fg.description, fg.generic_name, fg.strength,
                    fg.strength_unit, fg.dosage_form, fg.mnemonic, fg.status,
                    fg.charge_number, fg.brand_name, fg.formulary_status,
-                   fg.pyxis_id, fg.region, fg.environment
+                   fg.pyxis_id, fg.region, fg.environment,
+                   fg.dispense_strength, fg.dispense_strength_unit, fg.dispense_volume, fg.dispense_volume_unit
             FROM supply_records sr
             JOIN formulary_groups fg ON fg.group_id = sr.group_id AND fg.domain = sr.domain
             WHERE ${ndcConditions.join(' AND ')}
@@ -494,7 +564,8 @@ export async function searchByFields(
       parts.push(
         `SELECT * FROM (SELECT '${field}' AS _field, group_id, description, generic_name, strength, ` +
         `strength_unit, dosage_form, mnemonic, status, charge_number, brand_name, ` +
-        `formulary_status, pyxis_id, region, environment ` +
+        `formulary_status, pyxis_id, region, environment, ` +
+        `dispense_strength, dispense_strength_unit, dispense_volume, dispense_volume_unit ` +
         `FROM formulary_groups ${where} LIMIT ${limit})`
       )
       args.push(...fieldArgs)
@@ -521,7 +592,8 @@ export async function searchByFields(
       sql: `SELECT DISTINCT fg.group_id, fg.description, fg.generic_name, fg.strength,
                    fg.strength_unit, fg.dosage_form, fg.mnemonic, fg.status,
                    fg.charge_number, fg.brand_name, fg.formulary_status,
-                   fg.pyxis_id, fg.region, fg.environment
+                   fg.pyxis_id, fg.region, fg.environment,
+                   fg.dispense_strength, fg.dispense_strength_unit, fg.dispense_volume, fg.dispense_volume_unit
             FROM supply_records sr
             JOIN formulary_groups fg ON fg.group_id = sr.group_id AND fg.domain = sr.domain
             WHERE ${ndcConds.join(' AND ')}

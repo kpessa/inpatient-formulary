@@ -198,3 +198,17 @@ CREATE TABLE IF NOT EXISTS pattern_field_rules (
   expected_display TEXT NOT NULL DEFAULT '',
   created_at       TEXT DEFAULT (datetime('now'))
 );
+
+-- CDM (Charge Description Master) reference data
+CREATE TABLE IF NOT EXISTS cdm_master (
+  cdm_code    TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  tech_desc   TEXT NOT NULL DEFAULT '',
+  ins_code    TEXT NOT NULL DEFAULT '',
+  gl_key      TEXT NOT NULL DEFAULT '',
+  proc_code   TEXT NOT NULL DEFAULT '',
+  rev_code    TEXT NOT NULL DEFAULT '',
+  divisor     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_cdm_description ON cdm_master(LOWER(description));
+CREATE INDEX IF NOT EXISTS idx_cdm_proc_code ON cdm_master(proc_code);

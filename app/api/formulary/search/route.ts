@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { searchFormulary, searchByField, searchByFields, searchByPyxisIds } from "@/lib/db"
+import { searchFormulary, searchByField, searchByFields, searchByPyxisIds, enrichWithCdm, searchCdmUnbuilt } from "@/lib/db"
 import type { SearchResult, FieldSearchParams, AdvancedFilters } from "@/lib/db"
 import { tcDescendants } from "@/lib/therapeutic-class-map"
 
@@ -74,10 +74,13 @@ export async function GET(req: NextRequest) {
   if (fields && fields.length > 0 && q && !facilitiesParam && !hasAdvanced) {
     const t = performance.now()
     const fieldResults = await searchByFields(fields, q, region, environment, showInactive, limit)
+    // Enrich all field results with CDM data
+    for (const results of Object.values(fieldResults)) await enrichWithCdm(results)
     const ms = Math.round(performance.now() - t)
     // Return as regular JSON (not NDJSON streaming) so corporate VPN proxies that buffer
     // or truncate chunked transfer encoding receive complete results.
-    return NextResponse.json({ fields: fieldResults, ms })
+    const cdmUnbuilt = await searchCdmUnbuilt(q)
+    return NextResponse.json({ fields: fieldResults, ms, cdmUnbuilt })
   }
 
   // Single-query path: facility filter, wildcard, or no fields specified
@@ -98,11 +101,20 @@ export async function GET(req: NextRequest) {
             controller.enqueue(encoder.encode(JSON.stringify({ total: count }) + '\n'))
           },
         })
+        // Enrich with CDM data
+        await enrichWithCdm(results)
         const jsonStr = JSON.stringify({ results, total }) + '\n'
         const payload = encoder.encode(jsonStr)
         const chunkSize = 16 * 1024
         for (let offset = 0; offset < payload.length; offset += chunkSize) {
           controller.enqueue(payload.slice(offset, offset + chunkSize))
+        }
+        // Search for unbuilt CDMs (CDM entries with no formulary product)
+        if (q && q !== '*') {
+          const cdmUnbuilt = await searchCdmUnbuilt(q)
+          if (cdmUnbuilt.length > 0) {
+            controller.enqueue(encoder.encode(JSON.stringify({ cdmUnbuilt }) + '\n'))
+          }
         }
       } finally {
         controller.close()
