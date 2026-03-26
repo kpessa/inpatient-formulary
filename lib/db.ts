@@ -656,6 +656,15 @@ export async function getDistinctFacilities(): Promise<string[]> {
   return rows.map(r => r.facility as string)
 }
 
+export async function getOldestProdExtractDate(): Promise<string | null> {
+  const db = getDb()
+  const { rows } = await db.execute(
+    "SELECT MIN(extracted_at) as oldest_extract FROM formulary_groups WHERE environment = 'prod'"
+  )
+  if (!rows.length || !rows[0].oldest_extract) return null
+  return rows[0].oldest_extract as string
+}
+
 export async function getAvailableDomains(): Promise<{ region: string; env: string; domain: string }[]> {
   const db = getDb()
   const { rows } = await db.execute(

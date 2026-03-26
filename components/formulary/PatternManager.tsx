@@ -112,6 +112,13 @@ export function PatternManager({ open, onClose, onMinimize, onFocus, focused = t
   }, [rect])
 
   useEffect(() => {
+    if (!maximized) return
+    const onResize = () => setRect({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight - 32 })
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [maximized])
+
+  useEffect(() => {
     const onMove = (e: PointerEvent) => {
       if (!isResizing.current) return
       const { dir, startX, startY, startRect } = isResizing.current
@@ -291,7 +298,7 @@ export function PatternManager({ open, onClose, onMinimize, onFocus, focused = t
   if (!open || !rect) return null
 
   const effectiveRect = maximized
-    ? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }
+    ? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight - 32 }
     : rect
 
   return (

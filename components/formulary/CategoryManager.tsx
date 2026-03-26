@@ -546,7 +546,7 @@ export function CategoryManager({ open, onClose, onMinimize, onFocus, focused = 
 
   const zIndex = focused ? 51 : 50
   const style = maximized
-    ? { position: 'fixed' as const, inset: 0, zIndex, display: minimized ? 'none' as const : undefined }
+    ? { position: 'fixed' as const, top: 0, left: 0, right: 0, bottom: 32, zIndex, display: minimized ? 'none' as const : undefined }
     : { position: 'fixed' as const, left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex, display: minimized ? 'none' as const : undefined }
 
   return (

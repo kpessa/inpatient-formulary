@@ -1093,12 +1093,22 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
       preMaxRect.current = rect
       setIsMaximized(true)
       const w = Math.min(window.innerWidth, 1400)
-      setRect({ x: (window.innerWidth - w) / 2, y: 0, w, h: window.innerHeight })
+      setRect({ x: (window.innerWidth - w) / 2, y: 0, w, h: window.innerHeight - 32 })
       setTimeout(() => {
         cols.forEach(col => { if (!hiddenCols.has(col.id) && !['facility', 'charge', 'pyxis'].includes(col.id)) autoFitColumn(col.id) })
       }, 50)
     }
   }
+
+  useEffect(() => {
+    if (!isMaximized) return
+    const onResize = () => {
+      const w = Math.min(window.innerWidth, 1400)
+      setRect({ x: (window.innerWidth - w) / 2, y: 0, w, h: window.innerHeight - 32 })
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [isMaximized])
 
   // Auto-fit columns when maximizing so they use the extra space
   useEffect(() => {

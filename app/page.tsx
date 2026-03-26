@@ -115,8 +115,7 @@ export default function PharmNetFormulary() {
   const [domainItems, setDomainItems] = useState<Record<string, FormularyItem | null>>({})
   const [domainLoading, setDomainLoading] = useState<Record<string, boolean>>({})
   const [baseDomain, setBaseDomain] = useState<string | null>(null)
-  const [dateStr, setDateStr] = useState<string | null>(null)
-  const [timeStr, setTimeStr] = useState<string | null>(null)
+  const [extractAge, setExtractAge] = useState<{ date: string; daysAgo: number } | null>(null)
   const [scope, setScope] = useState<Scope>({ type: 'all' })
   const [availableDomains, setAvailableDomains] = useState<{ region: string; env: string; domain: string }[]>([])
   const [searchTrigger, setSearchTrigger] = useState<{ value: string; seq: number } | null>(null)
@@ -144,14 +143,17 @@ export default function PharmNetFormulary() {
   useEffect(() => { fetchPatterns() }, [])
 
   useEffect(() => {
-    const updateTime = () => {
-      const now = new Date()
-      setDateStr(`${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`)
-      setTimeStr(now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }))
-    }
-    updateTime()
-    const interval = setInterval(updateTime, 60000)
-    return () => clearInterval(interval)
+    fetch('/api/formulary/extract-age')
+      .then((r) => r.json())
+      .then((d: { extractedAt: string | null }) => {
+        if (!d.extractedAt) return
+        const extractDate = new Date(d.extractedAt)
+        const now = new Date()
+        const daysAgo = Math.floor((now.getTime() - extractDate.getTime()) / (1000 * 60 * 60 * 24))
+        const date = `${extractDate.getMonth() + 1}/${extractDate.getDate()}`
+        setExtractAge({ date, daysAgo })
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -675,9 +677,11 @@ export default function PharmNetFormulary() {
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-          <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center">PESSK</span>
-          <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{dateStr}</span>
-          <span className="text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center" suppressHydrationWarning>{timeStr}</span>
+          {extractAge && (
+            <span className={`text-xs font-mono px-2 border-l border-[#808080] h-5 flex items-center ${extractAge.daysAgo < 7 ? 'text-green-700' : extractAge.daysAgo <= 14 ? 'text-yellow-700' : 'text-red-700'}`}>
+              Extract: {extractAge.date} ({extractAge.daysAgo}d ago)
+            </span>
+          )}
         </div>
       </div>
     </div>
