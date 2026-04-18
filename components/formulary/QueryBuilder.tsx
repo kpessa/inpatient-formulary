@@ -41,6 +41,25 @@ export function validateParens(tokens: QueryToken[]): boolean {
 // Parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Detects whether the raw input uses any "advanced" search syntax. When it
+// doesn't, plain whitespace inside the input should be treated as part of a
+// single phrase rather than split into OR-joined clauses (per user request:
+// "metoprolol tartrate" should search for the phrase, not metoprolol OR
+// tartrate). We only treat *uppercase* AND/OR/NOT as operators here so that
+// natural-language phrases like "salt and pepper" or "tylenol or generic"
+// remain phrase searches; users opt into boolean mode by capitalizing.
+function hasAdvancedSyntax(s: string): boolean {
+  if (!s) return false
+  // Standalone uppercase boolean keyword (whitespace or string boundary on each side)
+  if (/(?:^|\s)(?:AND|OR|NOT)(?:\s|$)/.test(s)) return true
+  // Parens or angle-bracket clause
+  if (/[()<>]/.test(s)) return true
+  // field:value syntax — colon followed immediately by a non-space character,
+  // preceded by word chars (mirrors the tokenizer's `^(\w+):(\S+)` matcher).
+  if (/\b\w+:\S/.test(s)) return true
+  return false
+}
+
 export function parseQueryToState(
   raw: string,
   fieldAliases: Record<string, string>,
@@ -49,6 +68,18 @@ export function parseQueryToState(
   const tokens: QueryToken[] = []
   const input = raw.trim()
   if (!input) return { tokens: [], isAdvanced: false, parensValid: true }
+
+  // Plain text (no boolean operators, no field syntax, no parens/brackets)
+  // → treat the entire input as a single phrase clause. Preserves whitespace
+  // so "metoprolol tartrate" matches the literal phrase rather than splitting
+  // into separate OR-joined terms.
+  if (!hasAdvancedSyntax(input)) {
+    return {
+      tokens: [{ id: mkId(), type: 'clause', field: null, fieldLabel: 'All fields', value: input, negated: false }],
+      isAdvanced: false,
+      parensValid: true,
+    }
+  }
 
   let i = 0
 
