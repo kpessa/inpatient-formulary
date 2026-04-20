@@ -51,6 +51,17 @@ log "Running ANALYZE..."
 sqlite3 data/staging_formulary.db "ANALYZE;"
 ok "ANALYZE done"
 
+# ── 3b. Merge task/override tables from current production DB ────────────────
+log "Merging task tables from production..."
+
+# Read current prod DB name from .env.local
+CURRENT_DB=$(grep '^DATABASE_URL=' .env.local 2>/dev/null | sed 's/.*libsql:\/\///;s/-'"$ORG"'.*//' | tr -d '"')
+if [[ -z "$CURRENT_DB" ]]; then
+  warn "Could not determine current DB from .env.local — skipping task table merge"
+else
+  pnpm tsx scripts/merge_task_tables.ts "$CURRENT_DB"
+fi
+
 # ── 4. Get current DATABASE_URL (to know which old DB to delete later) ────────
 log "Reading current production DATABASE_URL..."
 npx vercel env pull /tmp/deploy-db-env.txt --environment production --yes 2>/dev/null | grep -v "^npm warn" || true

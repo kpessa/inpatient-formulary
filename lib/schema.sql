@@ -23,7 +23,14 @@ CREATE TABLE IF NOT EXISTS formulary_groups (
   oe_defaults_json TEXT NOT NULL DEFAULT '{}',
   dispense_json    TEXT NOT NULL DEFAULT '{}',
   clinical_json    TEXT NOT NULL DEFAULT '{}',
-  inventory_json   TEXT NOT NULL DEFAULT '{}'
+  inventory_json   TEXT NOT NULL DEFAULT '{}',
+  route                TEXT NOT NULL DEFAULT '',
+  dispense_category    TEXT NOT NULL DEFAULT '',
+  therapeutic_class    TEXT NOT NULL DEFAULT '',
+  dispense_strength      TEXT NOT NULL DEFAULT '',
+  dispense_strength_unit TEXT NOT NULL DEFAULT '',
+  dispense_volume        TEXT NOT NULL DEFAULT '',
+  dispense_volume_unit   TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_fg_domain     ON formulary_groups(domain);
@@ -155,18 +162,12 @@ CREATE TABLE IF NOT EXISTS multum_ndcs (
 );
 CREATE INDEX IF NOT EXISTS idx_mn_ndc ON multum_ndcs(ndc_formatted);
 
--- Denormalized columns extracted from JSON blobs (added via migration scripts)
--- ALTER TABLE formulary_groups ADD COLUMN route TEXT NOT NULL DEFAULT '';
--- ALTER TABLE formulary_groups ADD COLUMN dispense_category TEXT NOT NULL DEFAULT '';
--- CREATE INDEX IF NOT EXISTS idx_fg_dosage_form      ON formulary_groups(dosage_form);
--- CREATE INDEX IF NOT EXISTS idx_fg_route            ON formulary_groups(route);
--- CREATE INDEX IF NOT EXISTS idx_fg_dispense_cat     ON formulary_groups(dispense_category);
--- (scripts/migrate_filter_columns.ts)
---
--- ALTER TABLE formulary_groups ADD COLUMN therapeutic_class TEXT NOT NULL DEFAULT '';
--- UPDATE formulary_groups SET therapeutic_class = COALESCE(json_extract(clinical_json, '$.therapeuticClass'), '') WHERE therapeutic_class = '';
--- CREATE INDEX IF NOT EXISTS idx_fg_therapeutic_class ON formulary_groups(therapeutic_class);
--- (scripts/migrate_therapeutic_class.ts)
+-- Indexes on denormalized columns
+CREATE INDEX IF NOT EXISTS idx_fg_dosage_form      ON formulary_groups(dosage_form);
+CREATE INDEX IF NOT EXISTS idx_fg_route            ON formulary_groups(route);
+CREATE INDEX IF NOT EXISTS idx_fg_dispense_cat     ON formulary_groups(dispense_category);
+CREATE INDEX IF NOT EXISTS idx_fg_therapeutic_class ON formulary_groups(therapeutic_class);
+CREATE INDEX IF NOT EXISTS idx_fg_dispense_strength ON formulary_groups(dispense_strength);
 
 -- Manual exclusions: drugs explicitly removed from a category even if they match rules
 CREATE TABLE IF NOT EXISTS category_exclusions (
@@ -212,3 +213,69 @@ CREATE TABLE IF NOT EXISTS cdm_master (
 );
 CREATE INDEX IF NOT EXISTS idx_cdm_description ON cdm_master(LOWER(description));
 CREATE INDEX IF NOT EXISTS idx_cdm_proc_code ON cdm_master(proc_code);
+
+-- Task system tables
+CREATE TABLE IF NOT EXISTS change_tasks (
+  id TEXT PRIMARY KEY,
+  drug_key TEXT NOT NULL,
+  drug_description TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('diff', 'free_form')),
+  field_name TEXT,
+  field_label TEXT,
+  target_domain TEXT,
+  domain_values TEXT,
+  target_value TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'done')),
+  assigned_to TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  completed_by TEXT,
+  group_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ct_drug_key ON change_tasks(drug_key);
+CREATE INDEX IF NOT EXISTS idx_ct_status ON change_tasks(status);
+
+CREATE TABLE IF NOT EXISTS field_overrides (
+  id TEXT PRIMARY KEY,
+  domain TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  field_path TEXT NOT NULL,
+  override_value TEXT NOT NULL,
+  task_id TEXT,
+  applied_at TEXT NOT NULL,
+  applied_by TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fo_domain_group ON field_overrides(domain, group_id);
+
+CREATE TABLE IF NOT EXISTS product_builds (
+  id TEXT PRIMARY KEY,
+  drug_description TEXT NOT NULL,
+  drug_key TEXT,
+  status TEXT NOT NULL DEFAULT 'in_progress' CHECK(status IN ('in_progress', 'review', 'complete')),
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  created_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS build_domain_progress (
+  build_id TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'done')),
+  completed_at TEXT,
+  completed_by TEXT,
+  notes TEXT,
+  PRIMARY KEY (build_id, domain)
+);
+
+CREATE TABLE IF NOT EXISTS task_domain_progress (
+  task_id TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'done')),
+  completed_at TEXT,
+  completed_by TEXT,
+  notes TEXT,
+  PRIMARY KEY (task_id, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_tdp_task_id ON task_domain_progress(task_id);

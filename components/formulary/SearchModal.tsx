@@ -178,6 +178,7 @@ function getFieldValue(r: UnifiedResult, colId: string): string {
     case 'chargeDesc':  return r.cdmDescription ?? ''
     case 'brand':       return r.brandName ?? ''
     case 'pyxis':       return r.pyxisId ?? ''
+    case 'dispenseCategory': return r.dispenseCategory ?? ''
     default:            return ''
   }
 }
@@ -980,6 +981,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
     { id: "generic",     label: "Generic Name",       width: 140, align: 'left'   as const },
     { id: "strength",    label: "Strength / Vol",     width: 100, align: 'center' as const },
     { id: "form",        label: "Form",               width: 60,  align: 'center' as const },
+    { id: "dispenseCategory", label: "Disp Cat",      width: 80,  align: 'center' as const },
     { id: "description", label: "Description",        width: 220, align: 'left'   as const },
     { id: "brand",       label: "Brand Name",         width: 100, align: 'left'   as const },
   ])
@@ -2288,9 +2290,30 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         : total > results.length
                         ? `Showing ${results.length} of ${total} results — refine to narrow.`
                         : results.length > 0
-                        ? isUnified && baseResults.length < results.length
-                          ? `${baseResults.length} unique (${results.length} total).`
-                          : `${displayedResults.length} result${displayedResults.length !== 1 ? 's' : ''}.`
+                        ? (() => {
+                            if (filteredResults.length === 0) {
+                              const allInactive = !showInactive && results.every(r => r.status !== 'Active')
+                              if (allInactive) {
+                                return (
+                                  <>
+                                    0 of {results.length} active —{' '}
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowInactive(true)}
+                                      className="text-[#316AC5] hover:underline"
+                                    >
+                                      Show inactive
+                                    </button>
+                                  </>
+                                )
+                              }
+                              return `0 match current filters (${results.length} total).`
+                            }
+                            if (isUnified && baseResults.length < results.length) {
+                              return `${baseResults.length} unique (${results.length} total).`
+                            }
+                            return `${displayedResults.length} result${displayedResults.length !== 1 ? 's' : ''}.`
+                          })()
                         : queryMs !== null
                         ? 'No results found.'
                         : ''}
@@ -2323,7 +2346,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                       )}
                       {results.length > 0 && filteredResults.length < results.length && (
                         <>
-                          <span className="text-[#316AC5]">({filteredResults.length} filtered)</span>
+                          <span className="text-[#316AC5]">({results.length - filteredResults.length} hidden by filters)</span>
                           <button
                             onClick={() => setColFilters({})}
                             className="text-[#316AC5] hover:text-red-600 font-bold leading-none"

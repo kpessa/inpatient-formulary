@@ -7,6 +7,8 @@
  *
  * File → domain mapping:
  *   c152e_extract.csv  →  region: "east",    environment: "cert"
+ *   c152c_extract.csv  →  region: "central", environment: "cert"
+ *   c152w_extract.csv  →  region: "west",    environment: "cert"
  *   p152e_extract.csv  →  region: "east",    environment: "prod"
  *   p152w_extract.csv  →  region: "west",    environment: "prod"
  *   p152c_extract.csv  →  region: "central", environment: "prod"
@@ -27,6 +29,8 @@ const SCHEMA_FILE = path.join(process.cwd(), 'lib', 'schema.sql')
 
 const FILES: { file: string; region: string; env: string }[] = [
   { file: 'c152e_extract.csv', region: 'east',    env: 'cert' },
+  { file: 'c152c_extract.csv', region: 'central', env: 'cert' },
+  { file: 'c152w_extract.csv', region: 'west',    env: 'cert' },
   { file: 'p152e_extract.csv', region: 'east',    env: 'prod' },
   { file: 'p152w_extract.csv', region: 'west',    env: 'prod' },
   { file: 'p152c_extract.csv', region: 'central', env: 'prod' },
@@ -38,6 +42,8 @@ const GROUP_COLS = [
   'charge_number', 'brand_name', 'brand_name2', 'brand_name3', 'pyxis_id',
   'status', 'formulary_status', 'strength', 'strength_unit', 'dosage_form', 'legal_status',
   'identifiers_json', 'oe_defaults_json', 'dispense_json', 'clinical_json', 'inventory_json',
+  'route', 'dispense_category', 'therapeutic_class',
+  'dispense_strength', 'dispense_strength_unit', 'dispense_volume', 'dispense_volume_unit',
 ]
 const SUPPLY_COLS = [
   'domain', 'group_id',

@@ -50,6 +50,7 @@ export interface SearchResult {
   dispenseStrengthUnit: string
   dispenseVolume: string
   dispenseVolumeUnit: string
+  dispenseCategory: string
   cdmDescription?: string
   cdmProcCode?: string
 }
@@ -262,7 +263,8 @@ export async function searchFormulary({
       { sql: `SELECT group_id, description, generic_name, strength, strength_unit,
                      dosage_form, mnemonic, status, charge_number, brand_name,
                      formulary_status, pyxis_id, region, environment,
-                     dispense_strength, dispense_strength_unit, dispense_volume, dispense_volume_unit
+                     dispense_strength, dispense_strength_unit, dispense_volume, dispense_volume_unit,
+                     dispense_category
               FROM formulary_groups ${where} LIMIT ?`,
         args: [...sqlArgs, AUTO_FETCH_MAX] },
     ], 'read')
@@ -279,7 +281,8 @@ export async function searchFormulary({
   const sql = `
     SELECT group_id, description, generic_name, strength, strength_unit,
            dosage_form, mnemonic, status, charge_number, brand_name,
-           formulary_status, pyxis_id, inventory_json, region, environment
+           formulary_status, pyxis_id, inventory_json, region, environment,
+           dispense_category
     FROM formulary_groups
     ${where}
   `
@@ -333,6 +336,7 @@ function mapRow(row: Row): SearchResult {
     pyxisId: row.pyxis_id as string,
     region: row.region as string,
     environment: row.environment as string,
+    dispenseCategory: (row.dispense_category as string) ?? '',
     dispenseStrength: (row.dispense_strength as string) ?? '',
     dispenseStrengthUnit: (row.dispense_strength_unit as string) ?? '',
     dispenseVolume: (row.dispense_volume as string) ?? '',
@@ -361,7 +365,8 @@ export async function searchByPyxisIds(
   const { rows } = await db.execute({
     sql: `SELECT group_id, description, generic_name, strength, strength_unit,
                  dosage_form, mnemonic, status, charge_number, brand_name,
-                 formulary_status, pyxis_id, region, environment
+                 formulary_status, pyxis_id, region, environment,
+                 dispense_category
           FROM formulary_groups
           WHERE ${conditions.join(' AND ')}
           ORDER BY description`,
@@ -445,7 +450,8 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
                    fg.strength_unit, fg.dosage_form, fg.mnemonic, fg.status,
                    fg.charge_number, fg.brand_name, fg.formulary_status,
                    fg.pyxis_id, fg.region, fg.environment,
-                   fg.dispense_strength, fg.dispense_strength_unit, fg.dispense_volume, fg.dispense_volume_unit
+                   fg.dispense_strength, fg.dispense_strength_unit, fg.dispense_volume, fg.dispense_volume_unit,
+                   fg.dispense_category
             FROM supply_records sr
             JOIN formulary_groups fg ON fg.group_id = sr.group_id AND fg.domain = sr.domain
             WHERE ${ndcConditions.join(' AND ')}
@@ -482,7 +488,8 @@ export async function searchByField(params: FieldSearchParams): Promise<SearchRe
   const { rows } = await client.execute({
     sql: `SELECT group_id, description, generic_name, strength, strength_unit,
                  dosage_form, mnemonic, status, charge_number, brand_name,
-                 formulary_status, pyxis_id, region, environment
+                 formulary_status, pyxis_id, region, environment,
+                 dispense_category
           FROM formulary_groups ${where} LIMIT ?`,
     args: [...sqlArgs, params.limit],
   })
@@ -565,7 +572,8 @@ export async function searchByFields(
         `SELECT * FROM (SELECT '${field}' AS _field, group_id, description, generic_name, strength, ` +
         `strength_unit, dosage_form, mnemonic, status, charge_number, brand_name, ` +
         `formulary_status, pyxis_id, region, environment, ` +
-        `dispense_strength, dispense_strength_unit, dispense_volume, dispense_volume_unit ` +
+        `dispense_strength, dispense_strength_unit, dispense_volume, dispense_volume_unit, ` +
+        `dispense_category ` +
         `FROM formulary_groups ${where} LIMIT ${limit})`
       )
       args.push(...fieldArgs)
@@ -593,7 +601,8 @@ export async function searchByFields(
                    fg.strength_unit, fg.dosage_form, fg.mnemonic, fg.status,
                    fg.charge_number, fg.brand_name, fg.formulary_status,
                    fg.pyxis_id, fg.region, fg.environment,
-                   fg.dispense_strength, fg.dispense_strength_unit, fg.dispense_volume, fg.dispense_volume_unit
+                   fg.dispense_strength, fg.dispense_strength_unit, fg.dispense_volume, fg.dispense_volume_unit,
+                   fg.dispense_category
             FROM supply_records sr
             JOIN formulary_groups fg ON fg.group_id = sr.group_id AND fg.domain = sr.domain
             WHERE ${ndcConds.join(' AND ')}

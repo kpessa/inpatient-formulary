@@ -25,6 +25,13 @@ export interface GroupRow {
   dispense_json: string
   clinical_json: string
   inventory_json: string
+  route: string
+  dispense_category: string
+  therapeutic_class: string
+  dispense_strength: string
+  dispense_strength_unit: string
+  dispense_volume: string
+  dispense_volume_unit: string
 }
 
 export interface SupplyRow {
@@ -194,6 +201,13 @@ export function buildGroupRow(
     dispense_json: JSON.stringify(dispense),
     clinical_json: JSON.stringify(clinical),
     inventory_json: JSON.stringify(inventory),
+    route: oeDefaults.route,
+    dispense_category: dispense.dispenseCategory,
+    therapeutic_class: clinical.therapeuticClass,
+    dispense_strength: String(dispense.strength ?? ''),
+    dispense_strength_unit: dispense.strengthUnit,
+    dispense_volume: String(dispense.volume ?? ''),
+    dispense_volume_unit: dispense.volumeUnit,
   }
 }
 
