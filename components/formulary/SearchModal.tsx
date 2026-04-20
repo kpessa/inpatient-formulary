@@ -95,6 +95,7 @@ interface SearchModalProps {
   onCreateTask?: (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[], groupId?: string) => void
   onOpenCategoryManager?: () => void
   categoryTrigger?: { categoryId: string; seq: number } | null
+  extractAge?: { date: string; daysAgo: number } | null
 }
 
 const CORP_FACILITIES = new Set(["UHS Corp", "UHST", "UHSB"])
@@ -581,7 +582,7 @@ function classifyActiveFields(q: string, activeFields: Set<string>): Set<string>
   return new Set(candidates.filter(f => activeFields.has(f)))
 }
 
-export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, categoryTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask, onOpenCategoryManager }: SearchModalProps) {
+export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, categoryTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask, onOpenCategoryManager, extractAge }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState("")
   const [inputValue, setInputValue] = useState("")  // what TokenSearchInput displays (cleared on submit)
@@ -3829,6 +3830,14 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
             <Checkbox className="h-3 w-3 rounded-none border-[#808080] bg-white shadow-[inset_1px_1px_2px_rgba(0,0,0,0.3)]" />
             <span>Show all manufacturers</span>
           </label>
+          {extractAge && (
+            <span
+              className={`text-xs font-mono px-2 h-5 flex items-center border border-[#808080] bg-[#D4D0C8] ${extractAge.daysAgo < 7 ? 'text-green-700' : extractAge.daysAgo <= 14 ? 'text-yellow-700' : 'text-red-700'}`}
+              title={`Formulary extract from ${extractAge.date} — ${extractAge.daysAgo} day${extractAge.daysAgo === 1 ? '' : 's'} ago`}
+            >
+              Extract: {extractAge.date} ({extractAge.daysAgo}d ago)
+            </span>
+          )}
           <div className="flex gap-2 pr-2">
             <button
               onClick={handleOk}

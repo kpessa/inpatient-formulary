@@ -755,6 +755,7 @@ export default function PharmNetFormulary() {
         categoryTrigger={categoryTrigger}
         scope={scope}
         availableDomains={availableDomains}
+        extractAge={extractAge}
         onClose={() => { setIsSearchModalOpen(false); if (focusedWindow === 'search') setFocusedWindow('formulary') }}
         onCreateTask={canAdmin ? handleCreateTaskFromSearch : undefined}
         onOpenCategoryManager={() => { setIsCategoryManagerOpen(true); focusWindow('categories') }}
