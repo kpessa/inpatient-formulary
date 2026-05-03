@@ -6,7 +6,7 @@ import {
   DropdownMenuItem, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 
-export type WindowId = 'formulary' | 'search' | 'categories' | 'patterns' | 'tasks'
+export type WindowId = 'formulary' | 'search' | 'categories' | 'patterns' | 'tasks' | 'scanner' | 'extract-changes' | 'standardization-backlog'
 
 interface WindowEntry {
   id: WindowId
@@ -29,11 +29,14 @@ interface TaskBarProps {
 }
 
 const WINDOW_DEFS: WindowEntry[] = [
-  { id: 'formulary',   label: 'Formulary Manager',  icon: '💊' },
-  { id: 'search',      label: 'Product Search',      icon: '🔍' },
-  { id: 'categories',  label: 'Category Manager',    icon: '🏷' },
-  { id: 'patterns',    label: 'Pattern Manager',     icon: '◈' },
-  { id: 'tasks',       label: 'Task Manager',         icon: '📋' },
+  { id: 'formulary',                label: 'Formulary Manager',          icon: '💊' },
+  { id: 'search',                   label: 'Product Search',             icon: '🔍' },
+  { id: 'scanner',                  label: 'Diagnosis Scanner',          icon: '▌▎' },
+  { id: 'categories',               label: 'Category Manager',           icon: '🏷' },
+  { id: 'patterns',                 label: 'Pattern Manager',            icon: '◈' },
+  { id: 'tasks',                    label: 'Task Manager',               icon: '📋' },
+  { id: 'extract-changes',          label: 'Extract Changes',            icon: '📊' },
+  { id: 'standardization-backlog',  label: 'Standardization Backlog',    icon: '🛠️' },
 ]
 
 const MENU_ITEM_CLASS = 'rounded-none px-3 py-1 cursor-default hover:bg-[#316AC5] hover:text-white focus:bg-[#316AC5] focus:text-white flex items-center gap-2 text-[11px] font-mono'
@@ -84,6 +87,18 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isAdminM
               <DropdownMenuSeparator className="bg-[#808080] my-0" />
               <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('tasks')}>
                 <span className="w-3 text-center">{openWindows.has('tasks') ? '✓' : ''}</span> Task Manager
+              </DropdownMenuItem>
+            </>
+          )}
+          {isAdminMode && (
+            <>
+              <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('extract-changes')}>
+                <span className="w-3 text-center">{openWindows.has('extract-changes') ? '✓' : ''}</span>
+                <span>📊</span> Extract Changes
+              </DropdownMenuItem>
+              <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onStartMenuAction('standardization-backlog')}>
+                <span className="w-3 text-center">{openWindows.has('standardization-backlog') ? '✓' : ''}</span>
+                <span>🛠️</span> Standardization Backlog
               </DropdownMenuItem>
             </>
           )}

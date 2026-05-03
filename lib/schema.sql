@@ -33,9 +33,10 @@ CREATE TABLE IF NOT EXISTS formulary_groups (
   dispense_volume_unit   TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS idx_fg_domain     ON formulary_groups(domain);
-CREATE INDEX IF NOT EXISTS idx_fg_group_id   ON formulary_groups(group_id);
-CREATE INDEX IF NOT EXISTS idx_fg_region_env ON formulary_groups(region, environment);
+CREATE INDEX IF NOT EXISTS idx_fg_domain       ON formulary_groups(domain);
+CREATE INDEX IF NOT EXISTS idx_fg_group_id     ON formulary_groups(group_id);
+CREATE INDEX IF NOT EXISTS idx_fg_region_env   ON formulary_groups(region, environment);
+CREATE INDEX IF NOT EXISTS idx_fg_env_extract  ON formulary_groups(environment, extracted_at);
 
 -- Covering indexes for the fast scalar search path.
 -- Each index uses LOWER(column) as the leading key so SQLite can do a case-insensitive
@@ -162,6 +163,142 @@ CREATE TABLE IF NOT EXISTS multum_ndcs (
 );
 CREATE INDEX IF NOT EXISTS idx_mn_ndc ON multum_ndcs(ndc_formatted);
 
+-- ============================================================================
+-- Multum data model — full normalized extract from Cerner's MLTM_* tables.
+-- Loaded via scripts/load_multum_xlsx.ts from a Multum xlsx dump.
+--
+-- Distinct from the `multum_ndcs` CSV table above (cost/package only, smaller).
+-- Both can coexist; the new mltm_* tables are the source-of-truth for the
+-- Formulary Diagnosis Scanner's stacking probe (see findStackCandidates in
+-- lib/db.ts).
+--
+-- The Main Multum Drug Code (MMDC, mltm_ndc.main_multum_drug_code) is the
+-- canonical Cerner stacking key. Per Cerner's data model docs:
+--   "An MMDC is assigned to each unique combination of: active ingredient(s),
+--    principal_route_code, dose_form_code, and product_strength."
+-- Two NDCs share an MMDC iff they are interchangeable from a CDM-build
+-- perspective. Filter siblings by `obsolete_date IS NULL` to avoid
+-- recommending stack-onto a discontinued NDC.
+-- ============================================================================
+
+-- MLTM_NDC_CORE_DESCRIPTION — one row per NDC (~229K rows in full extract).
+CREATE TABLE IF NOT EXISTS mltm_ndc (
+  ndc_formatted           TEXT PRIMARY KEY,         -- 5-4-2 hyphenated, matches barcode parser output
+  ndc_code                TEXT NOT NULL,            -- raw integer-stripped form, joins mltm_ndc_cost
+  main_multum_drug_code   INTEGER,                  -- MMDC — Cerner stacking key
+  brand_code              INTEGER,
+  source_id               INTEGER,
+  orange_book_id          INTEGER,
+  otc_status              TEXT,                     -- 'Rx' / 'OTC' / NULL
+  unit_dose_code          TEXT,                     -- 'U' or 'N'
+  gbo                     TEXT,                     -- 'B' brand / 'G' generic / NULL
+  inner_package_size      REAL,
+  inner_package_desc_code INTEGER,
+  outer_package_size      REAL,
+  obsolete_date           TEXT,                     -- NULL = active; otherwise date discontinued
+  repackaged              TEXT                      -- 'T' or 'F'
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_ndc_mmdc ON mltm_ndc(main_multum_drug_code);
+CREATE INDEX IF NOT EXISTS idx_mltm_ndc_code ON mltm_ndc(ndc_code);
+
+-- MLTM_NDC_MAIN_DRUG_CODE — one row per MMDC (~15.8K rows).
+-- Defines the formulation: drug + dose form + strength + route.
+CREATE TABLE IF NOT EXISTS mltm_main_drug_code (
+  main_multum_drug_code  INTEGER PRIMARY KEY,
+  dose_form_code         INTEGER,                   -- → mltm_dose_form
+  product_strength_code  INTEGER,                   -- → mltm_product_strength
+  drug_identifier        TEXT,                      -- → mltm_drug_id (e.g. 'd00236')
+  principal_route_code   INTEGER,
+  csa_schedule           TEXT,
+  j_code                 TEXT,
+  j_code_description     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_mdc_drug_id ON mltm_main_drug_code(drug_identifier);
+
+-- MLTM_DOSE_FORM — dose form dictionary (~87 rows).
+CREATE TABLE IF NOT EXISTS mltm_dose_form (
+  dose_form_code         INTEGER PRIMARY KEY,
+  dose_form_abbr         TEXT,
+  dose_form_description  TEXT
+);
+
+-- MLTM_PRODUCT_STRENGTH — strength dictionary (~7.5K rows).
+CREATE TABLE IF NOT EXISTS mltm_product_strength (
+  product_strength_code         INTEGER PRIMARY KEY,
+  product_strength_description  TEXT
+);
+
+-- MLTM_DRUG_ID — generic drug master (~4.2K rows).
+CREATE TABLE IF NOT EXISTS mltm_drug_id (
+  drug_identifier              TEXT PRIMARY KEY,    -- e.g. 'd00236'
+  drug_synonym_id              INTEGER,             -- → mltm_drug_name for display
+  pregnancy_abbr               TEXT,
+  half_life                    REAL,
+  empirically                  TEXT,
+  is_single_ingredient         TEXT,                -- 'T' (single) or 'F' (combo). Probe respects this.
+  max_therapeutic_duplication  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_drug_id_syn ON mltm_drug_id(drug_synonym_id);
+
+-- MLTM_DRUG_NAME — drug names + synonyms (~79K rows).
+-- Composite PK because one synonym_id can map to multiple names (e.g. brand variants).
+CREATE TABLE IF NOT EXISTS mltm_drug_name (
+  drug_synonym_id  INTEGER NOT NULL,
+  drug_name        TEXT NOT NULL,
+  is_obsolete      TEXT NOT NULL,                   -- 'T' or 'F'
+  PRIMARY KEY (drug_synonym_id, drug_name)
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_drug_name_syn ON mltm_drug_name(drug_synonym_id);
+
+-- MLTM_NDC_COST — pricing per (NDC, inventory_type) (~154K active rows).
+-- Joined to mltm_ndc on ndc_code (the integer-stripped form, NOT ndc_formatted).
+CREATE TABLE IF NOT EXISTS mltm_ndc_cost (
+  ndc_code        TEXT NOT NULL,                    -- joins mltm_ndc.ndc_code
+  inventory_type  TEXT NOT NULL,                    -- 'A' = AWP, others
+  cost            REAL,
+  time_stamp      TEXT,
+  PRIMARY KEY (ndc_code, inventory_type)
+);
+
+-- MLTM_ORDER_SENT — Multum-defined order sentences keyed on MMDC (~70K rows).
+-- Lets the trace surface "the existing build's Multum-suggested order sentences are…"
+-- when a stack candidate is identified.
+CREATE TABLE IF NOT EXISTS mltm_order_sent (
+  external_identifier      TEXT PRIMARY KEY,
+  main_multum_drug_code    INTEGER,
+  catalog_cki              TEXT,
+  catalog_concept_cki      TEXT,
+  catalog_description      TEXT,
+  mnemonic_key_cap         TEXT,
+  mnemonic_type            TEXT,
+  order_sentence_id        INTEGER,
+  rx_type_mean             TEXT,
+  sentence_script          TEXT,
+  synonym_cki              TEXT,
+  synonym_concept_cki      TEXT,
+  usage_flag               TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_os_mmdc ON mltm_order_sent(main_multum_drug_code);
+
+-- MLTM_NDC_SOURCE — manufacturer/labeler dictionary (~2.5K rows).
+-- mltm_ndc.source_id → mltm_ndc_source.source_id resolves an NDC's labeler.
+-- ZIP is TEXT because Multum stores both numeric ('8807' = 08807) and
+-- hyphenated extended-zip ('60073-0490') values.
+CREATE TABLE IF NOT EXISTS mltm_ndc_source (
+  source_id    INTEGER PRIMARY KEY,
+  source_desc  TEXT,
+  address1     TEXT,
+  address2     TEXT,
+  city         TEXT,
+  state        TEXT,
+  province     TEXT,
+  zip          TEXT,
+  country      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_ndc_src_desc ON mltm_ndc_source(LOWER(source_desc));
+-- Add an index on mltm_ndc.source_id so labeler-→-NDC joins don't full-scan.
+CREATE INDEX IF NOT EXISTS idx_mltm_ndc_source_id ON mltm_ndc(source_id);
+
 -- Indexes on denormalized columns
 CREATE INDEX IF NOT EXISTS idx_fg_dosage_form      ON formulary_groups(dosage_form);
 CREATE INDEX IF NOT EXISTS idx_fg_route            ON formulary_groups(route);
@@ -279,3 +416,169 @@ CREATE TABLE IF NOT EXISTS task_domain_progress (
   PRIMARY KEY (task_id, domain)
 );
 CREATE INDEX IF NOT EXISTS idx_tdp_task_id ON task_domain_progress(task_id);
+
+-- DailyMed (NIH/NLM) per-NDC cache. The DailyMed REST API at
+-- https://dailymed.nlm.nih.gov/dailymed/services/v2/ is rate-permissive but
+-- internet-bound, so cache the SPL setId + image manifest per NDC. The
+-- payload stores the resolved metadata (title, set ID, image URLs) so the
+-- popover doesn't re-hit NIH on every open.
+--
+-- has_data = 0 means DailyMed has no SPL for this NDC (negative cache, so
+-- we don't keep retrying for an NDC NIH simply doesn't index).
+-- fetched_at = unix epoch seconds; treat entries older than ~30 days as stale.
+CREATE TABLE IF NOT EXISTS dailymed_cache (
+  ndc          TEXT PRIMARY KEY,
+  fetched_at   INTEGER NOT NULL,
+  has_data     INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+-- ============================================================================
+-- Multum pill-identification — image filename + imprint markings + lookups
+-- for shape / color / flavor / additional dose form. Loaded from MLTM_NDC_IMAGE
+-- and the four small dictionary sheets via scripts/load_multum_xlsx.ts.
+-- See scripts/lib/multum-tables.ts for the source-of-truth DDL.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS mltm_shape (
+  shape_id          INTEGER PRIMARY KEY,
+  shape_description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mltm_color (
+  color_id          INTEGER PRIMARY KEY,
+  color_description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mltm_flavor (
+  flavor_id          INTEGER PRIMARY KEY,
+  flavor_description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mltm_additional_doseform (
+  additional_doseform_id   INTEGER PRIMARY KEY,
+  additional_doseform_desc TEXT
+);
+
+-- Keyed by NDC_LEFT_9 — first 9 digits of the packed NDC (labeler+product,
+-- no package). Joins to supply_records via SUBSTR(REPLACE(ndc, '-', ''), 1, 9).
+-- Multiple rows per ndc_left_9 are possible (different presentations) so the
+-- PK is a synthetic id. Loader pads NDC_LEFT_9 to 9 chars at insert time.
+CREATE TABLE IF NOT EXISTS mltm_ndc_image (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  ndc_left_9              TEXT NOT NULL,
+  shape_id                INTEGER,
+  color_id                INTEGER,
+  flavor_id               INTEGER,
+  additional_doseform_id  INTEGER,
+  side_1_marking          TEXT,
+  side_2_marking          TEXT,
+  scored_ind              INTEGER,
+  image_filename          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_ndc_image_left9 ON mltm_ndc_image(ndc_left_9);
+
+-- FDA Orange Book therapeutic-equivalence dictionary. Maps mltm_ndc.orange_book_id
+-- to the AB rating ('A', 'B', '1'..'10', 'O') and human description.
+-- 7073 = 'O' = "Not Rated" dominates; 7075 = 'A' = "Therapeutically Equivalent".
+CREATE TABLE IF NOT EXISTS mltm_orange_book (
+  orange_book_id          INTEGER PRIMARY KEY,
+  orange_book_desc_ab     TEXT,
+  orange_book_description TEXT
+);
+
+-- Denormalized one-row-per-NDC table — the app's read source of truth for
+-- per-NDC reference data. Seeded by scripts/load_multum_xlsx.ts after the
+-- raw mltm_* tables are loaded. Going forward, a CCL query on the Cerner
+-- side can write directly here, sidestepping the per-table xlsx export.
+CREATE TABLE IF NOT EXISTS multum_ndc_combined (
+  ndc_formatted             TEXT PRIMARY KEY,
+  ndc_left_9                TEXT NOT NULL,
+  mmdc                      INTEGER,
+  drug_identifier           TEXT,
+  source_id                 INTEGER,
+  generic_name              TEXT,
+  strength_description      TEXT,
+  dose_form_description     TEXT,
+  csa_schedule              TEXT,
+  manufacturer_name         TEXT,
+  manufacturer_city         TEXT,
+  manufacturer_state        TEXT,
+  inner_package_size        REAL,
+  outer_package_size        REAL,
+  is_unit_dose              INTEGER NOT NULL DEFAULT 0,
+  gbo                       TEXT,
+  repackaged                INTEGER NOT NULL DEFAULT 0,
+  otc_status                TEXT,
+  obsolete_date             TEXT,
+  awp                       REAL,
+  acquisition_cost          REAL,
+  orange_book_id            INTEGER,
+  orange_book_rating        TEXT,
+  orange_book_description   TEXT,
+  imprint_side_1            TEXT,
+  imprint_side_2            TEXT,
+  is_scored                 INTEGER NOT NULL DEFAULT 0,
+  pill_shape                TEXT,
+  pill_color                TEXT,
+  pill_flavor               TEXT,
+  additional_dose_form      TEXT,
+  image_filename            TEXT,
+  loaded_at                 TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_multum_combined_mmdc      ON multum_ndc_combined(mmdc);
+CREATE INDEX IF NOT EXISTS idx_multum_combined_left9     ON multum_ndc_combined(ndc_left_9);
+CREATE INDEX IF NOT EXISTS idx_multum_combined_generic   ON multum_ndc_combined(LOWER(generic_name));
+CREATE INDEX IF NOT EXISTS idx_multum_combined_obsolete  ON multum_ndc_combined(obsolete_date) WHERE obsolete_date IS NULL;
+
+-- ============================================================================
+-- Extract changeset viewer — pre-computed delta between consecutive extracts.
+-- Computed by scripts/compute_extract_changes.ts at the end of deploy-db.sh,
+-- read by the admin route /admin/extract-changes. See memory entry
+-- project_extract_changeset_viewer.md for design context.
+--
+-- One row in extract_runs per deploy; one row in extract_changes per
+-- (drug, change) pair so the UI can pivot by field-name later.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS extract_runs (
+  id            TEXT PRIMARY KEY,                 -- e.g. 'formulary-20260503'
+  ran_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  prev_run_id   TEXT,                              -- id of the prior extract_run
+  summary_json  TEXT NOT NULL DEFAULT '{}'         -- per-domain aggregate counts
+);
+
+CREATE TABLE IF NOT EXISTS extract_changes (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id            TEXT NOT NULL,
+  -- 'added'              — new group_id (no prior presence in any domain)
+  -- 'cross_domain_added' — group_id existed elsewhere; now appears in this domain
+  -- 'modified'           — same (domain, group_id), at least one signature field differs
+  -- 'removed'            — present in old extract, absent in new
+  change_type       TEXT NOT NULL CHECK(change_type IN ('added','cross_domain_added','modified','removed')),
+  domain            TEXT NOT NULL,
+  group_id          TEXT NOT NULL,
+  description       TEXT NOT NULL DEFAULT '',     -- denormalized for display
+  -- Clinical event classification — what an admin recognizes:
+  --   'new_build'          — genuinely new drug (was 'added')
+  --   'cross_domain_add'   — appeared in this domain; existed elsewhere
+  --   'flex'               — inventory_json.facilities gained keys
+  --   'unflex'             — inventory_json.facilities lost keys / flipped to false
+  --   'stack'              — new NDC linked to existing drug (from supply_records diff)
+  --   'status_change'      — formulary_status flipped
+  --   'description_change' — description / generic_name / mnemonic edited
+  --   'other_modified'     — modified row with no specific clinical bucket
+  --   'removed'            — drug no longer present
+  -- A single drug can produce MULTIPLE rows (flexed AND status_changed = 2 rows).
+  event_type        TEXT NOT NULL DEFAULT 'other_modified',
+  -- Field-level diffs as JSON array. Shape depends on event_type:
+  --   'modified' family : [{"field":"dispense_category","old":"Vial","new":"Syringe"},...]
+  --   'flex'/'unflex'   : [{"field":"facilities","old":"[]","new":"[\"BWH\",\"MGH\"]"}]
+  --                       (array of facility names that flexed/unflexed encoded as JSON)
+  --   'stack'           : [{"field":"ndc","old":"","new":"0008-0123-45"},...] one per new NDC
+  --   'new_build'/'removed': '[]'
+  field_diffs_json  TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_ec_run_type    ON extract_changes(run_id, change_type);
+CREATE INDEX IF NOT EXISTS idx_ec_run_event   ON extract_changes(run_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_ec_run_domain  ON extract_changes(run_id, domain);
+CREATE INDEX IF NOT EXISTS idx_ec_run_group   ON extract_changes(run_id, group_id);

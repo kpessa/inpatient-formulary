@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PharmNet Inpatient Formulary — Next.js dev server, always-on.
+
+  Wiring:
+    - Starts on login (RunAtLoad).
+    - Stays up; auto-restarts on non-zero exit (KeepAlive: SuccessfulExit=false).
+    - 30s throttle so a fatal config error doesn't hot-loop the system.
+    - run-dev.sh resolves pnpm absolute path at exec time so this plist doesn't
+      bake in machine-specific paths.
+    - Output: ~/Library/Logs/InpatientFormulary/{dev-stdout,dev-stderr}.log
+    - HMR handles file edits — no restart needed for most code changes.
+      Restart only for: next.config.* changes, .env.* changes, package
+      installs, or when the dev server itself wedges.
+
+  Install (one-time):
+      bash scripts/launchd/install.sh
+        # or: pnpm dev:install
+
+  Restart (e.g. after env/config change):
+      bash scripts/launchd/restart.sh
+        # or: pnpm dev:restart
+
+  Tail logs:
+      pnpm dev:logs
+
+  Uninstall:
+      bash scripts/launchd/uninstall.sh
+        # or: pnpm dev:uninstall
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kurtpessa.inpatient-formulary.dev</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kurtpessa/code/inpatient_formulary/scripts/launchd/run-dev.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kurtpessa/code/inpatient_formulary</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash, but throttle to avoid hot-loops on persistent
+         startup errors. SuccessfulExit=false means clean exits don't trigger
+         a restart (rare for `next dev`, but covers manual `kill -TERM`). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!-- Common shell PATH; run-dev.sh extends it further if Volta/pnpm-store are present. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>NODE_ENV</key>
+        <string>development</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kurtpessa/Library/Logs/InpatientFormulary/dev-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kurtpessa/Library/Logs/InpatientFormulary/dev-stderr.log</string>
+</dict>
+</plist>

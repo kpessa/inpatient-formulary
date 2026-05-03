@@ -7,9 +7,21 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "dev:install": "bash scripts/launchd/install.sh",
+    "dev:restart": "bash scripts/launchd/restart.sh",
+    "dev:uninstall": "bash scripts/launchd/uninstall.sh",
+    "dev:logs": "tail -F ~/Library/Logs/InpatientFormulary/dev-stdout.log ~/Library/Logs/InpatientFormulary/dev-stderr.log",
+    "dev:status": "launchctl print gui/$(id -u)/com.kurtpessa.inpatient-formulary.dev | head -40 || echo 'Not loaded — run pnpm dev:install'",
     "db:import": "tsx scripts/import_csv.ts",
     "db:import:west-prod": "tsx scripts/import_csv.ts --csv data/c152e_extract.csv --db data/formulary.db --domain west_prod --region west --env prod",
-    "db:migrate:turso": "tsx scripts/migrate_to_turso.ts"
+    "db:migrate:turso": "tsx scripts/migrate_to_turso.ts",
+    "db:load:multum": "tsx scripts/load_multum_xlsx.ts",
+    "db:push:multum:turso": "tsx scripts/push_multum_to_turso.ts",
+    "db:push:multum:turso:changed": "tsx scripts/push_multum_to_turso.ts --changed",
+    "db:reload:multum": "pnpm db:load:multum && pnpm db:push:multum:turso",
+    "db:reload:multum:changed": "pnpm db:load:multum && pnpm db:push:multum:turso:changed",
+    "db:rebuild:replica": "bash scripts/launchd/rebuild-replica.sh",
+    "db:reload:multum:full": "pnpm db:reload:multum && pnpm db:rebuild:replica"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -77,6 +89,7 @@
     "tailwindcss": "^4.2.0",
     "tsx": "^4.21.0",
     "tw-animate-css": "1.3.3",
-    "typescript": "5.7.3"
+    "typescript": "5.7.3",
+    "xlsx": "^0.18.5"
   }
 }

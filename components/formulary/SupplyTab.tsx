@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import {
@@ -13,6 +13,10 @@ import {
 } from "@/components/ui/table"
 import type { FormularyItem, SupplyRecord } from "@/lib/types"
 import type { FieldValueMap, DomainRecord, DomainValue } from "@/lib/formulary-diff"
+import { useNdcSources } from "@/lib/use-ndc-sources"
+import { NdcSourceBadges, NdcPillIdInline } from "./NdcSourceBadges"
+import { NdcDomainCoverage } from "./NdcDomainCoverage"
+import { NdcDetailPopover } from "./NdcDetailPopover"
 
 interface SupplyTabProps {
   item: FormularyItem | null
@@ -20,6 +24,57 @@ interface SupplyTabProps {
   fieldValueMap?: FieldValueMap
   domainRecords?: DomainRecord[]
   onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void
+}
+
+/**
+ * NDC cell renderer used by both the single-domain and union views. When the
+ * NDC has Multum reference data, the cell becomes a link-styled trigger that
+ * opens the shared `NdcDetailPopover`. Without Multum data, falls back to
+ * plain text — clicking would just show "not in Multum" anyway.
+ *
+ * `select-text` keeps the value drag-selectable so users can copy with ⌘+C
+ * or right-click → Copy regardless of whether the link affordance fires.
+ */
+function ClickableNdc({
+  ndc,
+  isSelected,
+  hasMultum,
+}: {
+  ndc: string
+  isSelected: boolean
+  hasMultum: boolean
+}) {
+  if (!ndc) return null
+  if (!hasMultum) {
+    return (
+      <span
+        className="select-text"
+        title="Not in Multum — click does nothing"
+      >
+        {ndc}
+      </span>
+    )
+  }
+  return (
+    <NdcDetailPopover ndc={ndc}>
+      <button
+        type="button"
+        onClick={(e) => e.stopPropagation()}
+        className={`inline-flex items-center gap-1 font-mono tabular-nums select-text underline-offset-2 decoration-dotted hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#0033AA] data-[state=open]:bg-[#E5EEF7] data-[state=open]:underline data-[state=open]:decoration-solid px-0.5 -mx-0.5 ${
+          isSelected ? "text-white underline decoration-solid" : "text-[#0033AA]"
+        }`}
+        title="Click for Multum / DailyMed detail"
+      >
+        <span
+          aria-hidden="true"
+          className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
+            isSelected ? "bg-white" : "bg-[#0033AA]"
+          }`}
+        />
+        {ndc}
+      </button>
+    </NdcDetailPopover>
+  )
 }
 
 function charDiff(base: string, cmp: string): Array<{ text: string; diff: boolean }> {
@@ -52,8 +107,16 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
     }
   }
 
-  // Sort: NDCs present in all domains first, then by NDC string
+  // An NDC is treated as "primary" if any loaded domain has its record
+  // marked isPrimary — pins the assigned primary to the top regardless of
+  // domain coverage or NDC string ordering.
+  const isPrimaryNdc = (ndc: string) =>
+    [...(ndcMap.get(ndc)?.values() ?? [])].some(r => r.isPrimary)
+
+  // Sort: primary first, then NDCs present in all domains, then by NDC string
   const allNdcs = [...ndcMap.keys()].sort((a, b) => {
+    const aP = isPrimaryNdc(a), bP = isPrimaryNdc(b)
+    if (aP !== bP) return aP ? -1 : 1
     const aAll = loadedDomains.every(dr => ndcMap.get(a)?.has(dr.domain))
     const bAll = loadedDomains.every(dr => ndcMap.get(b)?.has(dr.domain))
     if (aAll !== bAll) return aAll ? -1 : 1
@@ -78,9 +141,55 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   }
 
   const diffCount = allNdcs.filter(getNdcDiff).length
+  const sources = useNdcSources(allNdcs)
+
+  // Stewardship mode: filter to NDCs whose prod-region coverage is partial.
+  // "Partial" is measured against the prod regions where the product
+  // *exists* (not an absolute W/C/E) — an east-only product can still be
+  // fully stacked with one segment lit.
+  const [gapsOnly, setGapsOnly] = useState(false)
+  const prodRegionsLoaded = loadedDomains
+    .filter((dr) => dr.domain.endsWith("_prod"))
+    .map((dr) => dr.domain.split("_")[0])
+  const isPartialStack = (ndc: string): boolean => {
+    if (prodRegionsLoaded.length < 2) return false
+    const data = ndcMap.get(ndc)
+    if (!data) return false
+    const present = prodRegionsLoaded.filter((reg) =>
+      data.has(`${reg}_prod`),
+    ).length
+    return present > 0 && present < prodRegionsLoaded.length
+  }
+  const partialCount = allNdcs.filter(isPartialStack).length
+  const visibleNdcs = gapsOnly ? allNdcs.filter(isPartialStack) : allNdcs
+  const canShowGapsControls = prodRegionsLoaded.length >= 2
 
   return (
     <div className="flex flex-col h-full text-xs font-mono">
+      {canShowGapsControls && (
+        <div className="flex items-center justify-between gap-3 px-2 py-1 border-b border-[#808080] bg-[#D4D0C8]">
+          <label
+            className="flex items-center gap-1.5 text-xs cursor-pointer select-none"
+            title="Show only NDCs whose prod-region coverage isn't uniform — useful for stewardship work."
+          >
+            <Checkbox
+              checked={gapsOnly}
+              onCheckedChange={(c) => setGapsOnly(!!c)}
+              className="rounded-none border-[#808080] h-3 w-3"
+            />
+            Gaps only
+          </label>
+          <span className="text-[#606060] text-[11px]">
+            {partialCount} of {allNdcs.length} partially stacked
+            {prodRegionsLoaded.length < 3 && (
+              <span className="text-[#808080] italic">
+                {" "}
+                · {prodRegionsLoaded.length} of 3 prod regions loaded
+              </span>
+            )}
+          </span>
+        </div>
+      )}
       <div className="flex-1 overflow-auto border border-[#808080]">
         <Table className="text-xs font-mono border-collapse w-full min-w-max">
           <TableHeader className="sticky top-0 bg-[#D4D0C8] z-10">
@@ -89,13 +198,16 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8 text-center">Act</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8 text-center">1*</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-36">NDC</TableHead>
+              <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
+              <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
+              <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080]">Manufacturer / Description</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-8">B/G</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground w-20">AWP</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {allNdcs.map((ndc, idx) => {
+            {visibleNdcs.map((ndc, idx) => {
               const domainData = ndcMap.get(ndc)!
               const isDiff = getNdcDiff(ndc)
               const isExpanded = expandedNdcs.has(ndc)
@@ -164,7 +276,22 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
                     <Checkbox checked={baseRec.isPrimary} className="rounded-none border-[#808080] h-3 w-3" onClick={e => e.stopPropagation()} />
                   </TableCell>
-                  <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono">{ndc}</TableCell>
+                  <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono">
+                    <ClickableNdc
+                      ndc={ndc}
+                      isSelected={isSelected}
+                      hasMultum={!!sources[ndc]?.inMultum}
+                    />
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    <NdcDomainCoverage ndc={ndc} domainRecords={domainRecords} />
+                  </TableCell>
+                  <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8]">
+                    <NdcSourceBadges summary={sources[ndc]} selected={isSelected} />
+                  </TableCell>
+                  <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] truncate max-w-[160px]">
+                    <NdcPillIdInline summary={sources[ndc]} selected={isSelected} />
+                  </TableCell>
                   <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] truncate max-w-[280px]">{baseDesc}</TableCell>
                   <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8]">{baseRec.isBrand ? 'B' : 'G'}</TableCell>
                   <TableCell className="h-5 px-2 py-0">{baseRec.awpCost != null ? `$${baseRec.awpCost.toFixed(4)}` : ''}</TableCell>
@@ -193,7 +320,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                           {dr.badge}
                         </span>
                       </TableCell>
-                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={3}>
+                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={6}>
                         {rec
                           ? segments
                             ? segments.map((seg, j) =>
@@ -210,10 +337,12 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                 }) : [])
               ]
             })}
-            {allNdcs.length === 0 && (
+            {visibleNdcs.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-4 text-[#808080]">
-                  No supply records
+                <TableCell colSpan={10} className="text-center py-4 text-[#808080]">
+                  {allNdcs.length === 0
+                    ? "No supply records"
+                    : "All NDCs are fully stacked across loaded prod regions."}
                 </TableCell>
               </TableRow>
             )}
@@ -235,13 +364,34 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
 
   // Use union view when 2+ domains have data
   const loadedDomains = domainRecords?.filter(dr => dr.item !== null) ?? []
-  if (domainRecords && loadedDomains.length >= 2) {
-    return <SupplyUnionView domainRecords={domainRecords} onCreateTask={onCreateTask} />
-  }
+  const useUnionView = !!(domainRecords && loadedDomains.length >= 2)
 
-  // Single-domain view (original)
-  const supplyData = item?.supplyRecords ?? []
+  // Single-domain view data (computed unconditionally so the hook list below
+  // stays stable when `useUnionView` flips — see Rules of Hooks).
+  // Primary-first sort: pins the assigned primary to the top regardless of
+  // the order it sits in supply_records. Stable for the rest, so the
+  // remaining NDCs preserve their on-disk order.
+  const supplyData = useMemo(() => {
+    const rows = item?.supplyRecords ?? []
+    return [...rows].sort((a, b) =>
+      a.isPrimary === b.isPrimary ? 0 : a.isPrimary ? -1 : 1,
+    )
+  }, [item?.supplyRecords])
   const ndcSetHighlighted = highlightedFields?.has('ndcSet') ?? false
+
+  // Batched per-NDC source lookup. Skipped (empty list) when delegating to
+  // SupplyUnionView — it has its own useNdcSources for its (different) NDC
+  // set, so fetching here would be wasted. Empty NDC strings are filtered
+  // out — they can sneak in via supply_records rows with default-empty ndc.
+  const allNdcs = useMemo(
+    () => useUnionView ? [] : supplyData.map((r) => r.ndc).filter((n) => !!n),
+    [supplyData, useUnionView],
+  )
+  const sources = useNdcSources(allNdcs)
+
+  if (useUnionView) {
+    return <SupplyUnionView domainRecords={domainRecords!} onCreateTask={onCreateTask} />
+  }
 
   return (
     <div className="flex flex-col h-full text-xs font-mono">
@@ -257,6 +407,9 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8"></TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8">1*</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-32">Drug ID</TableHead>
+              <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
+              <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
+              <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-24">Inner NDC</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-12">Active</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-44">Manufacturer</TableHead>
@@ -273,6 +426,7 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
           <TableBody>
             {supplyData.map((row, idx) => {
               const isSelected = selectedNdc === row.ndc
+              const summary = row.ndc ? sources[row.ndc] : undefined
               return (
                 <TableRow
                   key={`${row.ndc}-${idx}`}
@@ -289,8 +443,17 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
                     <Checkbox checked={row.isPrimary} className="rounded-none border-[#808080] h-3 w-3" onClick={e => e.stopPropagation()} />
                   </TableCell>
-                  <TableCell className={`h-5 px-1 py-0 border-r border-[#D4D0C8] font-mono ${isSelected ? "bg-white text-[#000080] border border-[#000080]" : ""}`}>
-                    {row.ndc}
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] font-mono">
+                    <ClickableNdc ndc={row.ndc} isSelected={isSelected} hasMultum={!!summary?.inMultum} />
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    {row.ndc && <NdcDomainCoverage ndc={row.ndc} domainRecords={domainRecords} />}
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                    <NdcSourceBadges summary={summary} selected={isSelected} />
+                  </TableCell>
+                  <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] truncate max-w-[160px]">
+                    <NdcPillIdInline summary={summary} selected={isSelected} />
                   </TableCell>
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">{row.isNonReference ? row.ndc : ""}</TableCell>
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">

@@ -22,6 +22,14 @@ data/*.csv
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/*.xlsx
+data/*.zip
+data/*.json
+data/_test_write
+data/snapshots/
+
+# Next.js / TypeScript build artifacts
+tsconfig.tsbuildinfo
 
 .vercel
 .env*.local

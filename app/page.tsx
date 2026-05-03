@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo } from "react"
+import { ScanBarcode } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { OEDefaultsTab } from "@/components/formulary/OEDefaultsTab"
 import { DispenseTab } from "@/components/formulary/DispenseTab"
@@ -8,6 +9,7 @@ import { InventoryTab } from "@/components/formulary/InventoryTab"
 import { ClinicalTab } from "@/components/formulary/ClinicalTab"
 import { SupplyTab } from "@/components/formulary/SupplyTab"
 import { IdentifiersTab } from "@/components/formulary/IdentifiersTab"
+import { ScannerWindow } from "@/components/formulary/ScannerWindow"
 import { FormularyHeader } from "@/components/formulary/FormularyHeader"
 import { SearchModal } from "@/components/formulary/SearchModal"
 import { ImportModal } from "@/components/formulary/ImportModal"
@@ -21,6 +23,8 @@ import { NonReferenceDialog } from "@/components/formulary/NonReferenceDialog"
 import { CategoryManager } from "@/components/formulary/CategoryManager"
 import { PatternManager } from "@/components/formulary/PatternManager"
 import { TaskManagerWindow } from "@/components/formulary/TaskManagerWindow"
+import { ExtractChangesWindow } from "@/components/admin/ExtractChangesWindow"
+import { StandardizationBacklogWindow } from "@/components/admin/StandardizationBacklogWindow"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -103,11 +107,21 @@ export default function PharmNetFormulary() {
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false)
   const [isPatternManagerOpen, setIsPatternManagerOpen] = useState(false)
   const [isTaskManagerOpen, setIsTaskManagerOpen] = useState(false)
+  const [isScannerOpen, setIsScannerOpen] = useState(false)
+  const [isExtractChangesOpen, setIsExtractChangesOpen] = useState(false)
+  const [isStandardizationBacklogOpen, setIsStandardizationBacklogOpen] = useState(false)
+  const [scannerInitialInput, setScannerInitialInput] = useState<string>("")
   const [taskSummary, setTaskSummary] = useState<{ pending: number; inProgress: number } | undefined>(undefined)
 
   // Window manager
   const [focusedWindow, setFocusedWindow] = useState<WindowId>('formulary')
   const [minimizedWindows, setMinimizedWindows] = useState<Set<WindowId>>(new Set())
+  // Closed state for the main Formulary Manager window — when true the window
+  // is hidden and a desktop icon is shown for re-opening. Distinct from
+  // `minimizedWindows` because closed = "off the taskbar entirely, only the
+  // desktop icon brings it back" (Win95 X button), where minimize keeps it
+  // in the taskbar (Win95 _ button).
+  const [formularyClosed, setFormularyClosed] = useState(false)
   const focusWindow = (id: WindowId) => {
     setFocusedWindow(id)
     setMinimizedWindows(prev => { const s = new Set(prev); s.delete(id); return s })
@@ -115,6 +129,15 @@ export default function PharmNetFormulary() {
   const minimizeWindow = (id: WindowId) => {
     setMinimizedWindows(prev => new Set([...prev, id]))
     setFocusedWindow('formulary')
+  }
+  const closeFormulary = () => {
+    setFormularyClosed(true)
+    // Don't change focus — when the icon reopens us we go back to formulary.
+  }
+  const openFormulary = () => {
+    setFormularyClosed(false)
+    setFocusedWindow('formulary')
+    setMinimizedWindows(prev => { const s = new Set(prev); s.delete('formulary'); return s })
   }
   const [selectedItemPreview, setSelectedItemPreview] = useState<FormularyItem | null>(null)
   const [domainItems, setDomainItems] = useState<Record<string, FormularyItem | null>>({})
@@ -124,6 +147,75 @@ export default function PharmNetFormulary() {
   const [scope, setScope] = useState<Scope>({ type: 'all' })
   const [availableDomains, setAvailableDomains] = useState<{ region: string; env: string; domain: string }[]>([])
   const [searchTrigger, setSearchTrigger] = useState<{ value: string; seq: number } | null>(null)
+
+  // Custom-event bridge: admin desktop windows (Extract Changes,
+  // Standardization Backlog) dispatch `pharmnet:load-drug` with detail
+  // {value, source?} when the user double-clicks a drug row. We:
+  //   1. Look up the drug by CDM via the search API
+  //   2. If found, fetch its full FormularyItem and load it into the
+  //      Formulary Manager (mimics the SearchModal `onSelect` flow)
+  //   3. Minimize the source admin window so Formulary Manager comes to front
+  //   4. If not found, fall back to opening Product Search pre-filled
+  //
+  // Implemented with a ref + one-time listener so we don't re-attach on
+  // every render but still capture the latest state values inside the load
+  // function (assigned every render).
+  const loadDrugRef = useRef<((value: string, source?: string) => Promise<void>) | null>(null)
+  loadDrugRef.current = async (value, source) => {
+    if (!value) return
+    try {
+      const sr = await fetch(`/api/formulary/search?q=${encodeURIComponent(value)}&fields=charge_number&limit=1&showInactive=true`)
+      const sd = await sr.json() as { fields?: { charge_number?: { groupId: string }[] } }
+      const result = sd.fields?.charge_number?.[0]
+      if (!result?.groupId) {
+        // No CDM match — open Search Modal pre-filled so user can
+        // pick from a broader description-based search instead.
+        setSearchTrigger(prev => ({ value, seq: (prev?.seq ?? 0) + 1 }))
+        setIsSearchModalOpen(true)
+        setFocusedWindow('search')
+        return
+      }
+      const ir = await fetch(`/api/formulary/item?groupId=${encodeURIComponent(result.groupId)}`)
+      const id = await ir.json() as { item: FormularyItem | null }
+      if (!id.item) return
+
+      // Mirror SearchModal's onSelect flow.
+      setSelectedItemPreview(id.item)
+      setIsSearchModalOpen(false)
+      setPendingTaskCount(0)
+      setIsTaskPanelOpen(false)
+      const available = availableDomains.filter(d => d.env === 'prod').map(d => d.domain)
+      if (available.length > 1) {
+        const pyxisId      = id.item.identifiers?.pyxisId?.trim()      || undefined
+        const chargeNumber = id.item.identifiers?.chargeNumber?.trim() || undefined
+        const fetchParams = { groupId: id.item.groupId, pyxisId, chargeNumber }
+        currentFetchParamsRef.current = fetchParams
+        setDomainItems({})
+        setBaseDomain(null)
+        doFetchDomainItems(fetchParams, showRawExtract, available)
+      }
+
+      // Minimize the source admin window so Formulary Manager comes to front.
+      if (source === 'extract-changes' || source === 'standardization-backlog') {
+        setMinimizedWindows(prev => new Set(prev).add(source as WindowId))
+      }
+      setFocusedWindow('formulary')
+      setFormularyClosed(false)
+    } catch {
+      // Network/parse error — fall back to opening search modal.
+      setSearchTrigger(prev => ({ value, seq: (prev?.seq ?? 0) + 1 }))
+      setIsSearchModalOpen(true)
+      setFocusedWindow('search')
+    }
+  }
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ value: string; source?: string }>
+      if (ce.detail?.value) loadDrugRef.current?.(ce.detail.value, ce.detail.source)
+    }
+    window.addEventListener('pharmnet:load-drug', handler as EventListener)
+    return () => window.removeEventListener('pharmnet:load-drug', handler as EventListener)
+  }, [])
   const [violationFilterTrigger, setViolationFilterTrigger] = useState<{ patternId: string; seq: number } | null>(null)
   const [categoryTrigger, setCategoryTrigger] = useState<{ categoryId: string; seq: number } | null>(null)
 
@@ -318,7 +410,21 @@ export default function PharmNetFormulary() {
     null
 
   const [rect, setRect] = useState<{ x: number, y: number, w: number, h: number } | null>(null)
+  const [maximized, setMaximized] = useState(false)
+  // Saved geometry from before maximize, restored when toggling back. Lives
+  // in a ref because we don't need a re-render when it changes.
+  const preMaxRect = useRef<{ x: number, y: number, w: number, h: number } | null>(null)
   const isResizing = useRef<{ dir: string, startX: number, startY: number, startRect: { x: number, y: number, w: number, h: number } } | null>(null)
+
+  const toggleMaximize = () => {
+    if (maximized) {
+      if (preMaxRect.current) setRect(preMaxRect.current)
+      setMaximized(false)
+    } else {
+      if (rect) preMaxRect.current = rect
+      setMaximized(true)
+    }
+  }
 
   useEffect(() => {
     setRect({
@@ -377,6 +483,8 @@ export default function PharmNetFormulary() {
 
   const handlePointerDown = (dir: string) => (e: React.PointerEvent) => {
     if (!rect) return
+    // No drag/resize while maximized — matches Win95 behavior.
+    if (maximized) return
     e.preventDefault()
     e.stopPropagation()
     isResizing.current = { dir, startX: e.clientX, startY: e.clientY, startRect: rect }
@@ -419,39 +527,122 @@ export default function PharmNetFormulary() {
 
   return (
     <div className="min-h-screen bg-[#808080] overflow-hidden pb-8">
+      {/* Desktop icon for the Formulary Manager — visible only when the
+          window is closed. Win95 convention: icon + text label, double-click
+          launches. Single-click also launches (modern UX) since it's the
+          only icon on the desktop and there's no real "select" need. */}
+      {formularyClosed && (
+        <button
+          type="button"
+          onDoubleClick={openFormulary}
+          onClick={openFormulary}
+          className="fixed top-4 left-4 w-20 flex flex-col items-center gap-1 p-1 text-white font-mono text-[11px] focus:outline-none focus-visible:bg-[#316AC5]/40 hover:bg-[#316AC5]/30 cursor-default z-30 animate-in fade-in zoom-in-90 duration-300 ease-out"
+          title="Open PharmNet Inpatient Formulary Manager"
+          aria-label="Open Formulary Manager"
+        >
+          <div
+            className="w-12 h-12 bg-[#C85A00] border-2 border-white shadow-[2px_2px_0_#000] flex items-center justify-center transition-transform duration-150 group-hover:scale-105 active:scale-95"
+            style={isAdminMode ? { boxShadow: '2px 2px 0 #000, 0 0 8px #E8C44C' } : undefined}
+          >
+            <span className="text-white font-bold text-xl tracking-tight">Rx</span>
+          </div>
+          <span
+            className="text-center leading-tight max-w-full px-1 [text-shadow:1px_1px_0_#000]"
+          >
+            Formulary
+            <br />
+            Manager
+          </span>
+        </button>
+      )}
+
       <div
-        className="fixed flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-2xl border border-white border-r-[#808080] border-b-[#808080]"
-        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex: focusedWindow === 'formulary' ? 51 : 50, display: minimizedWindows.has('formulary') ? 'none' : undefined }}
+        className={`fixed flex flex-col bg-[#D4D0C8] font-mono text-xs select-none shadow-2xl border border-white border-r-[#808080] border-b-[#808080] origin-center transition-[opacity,transform] duration-200 ease-out ${
+          formularyClosed ? 'opacity-0 scale-90 pointer-events-none' : 'opacity-100 scale-100'
+        }`}
+        // Minimize uses display:none for instant taskbar-handoff (no animation).
+        // Close drives the visual via opacity/scale on the className above so
+        // the window can animate out and the desktop icon fade in.
+        style={
+          maximized
+            ? {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 32,
+                zIndex: focusedWindow === 'formulary' ? 51 : 50,
+                display: minimizedWindows.has('formulary') ? 'none' : undefined,
+              }
+            : {
+                left: rect.x,
+                top: rect.y,
+                width: rect.w,
+                height: rect.h,
+                zIndex: focusedWindow === 'formulary' ? 51 : 50,
+                display: minimizedWindows.has('formulary') ? 'none' : undefined,
+              }
+        }
+        aria-hidden={formularyClosed}
         onPointerDownCapture={() => setFocusedWindow('formulary')}
       >
-        {/* Resize Handles */}
-        <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
-        <div onPointerDown={handlePointerDown('s')} className="absolute bottom-0 left-2 right-2 h-1 cursor-s-resize z-20" />
-        <div onPointerDown={handlePointerDown('e')} className="absolute top-2 bottom-2 right-0 w-1 cursor-e-resize z-20" />
-        <div onPointerDown={handlePointerDown('w')} className="absolute top-2 bottom-2 left-0 w-1 cursor-w-resize z-20" />
-        <div onPointerDown={handlePointerDown('nw')} className="absolute top-0 left-0 w-2 h-2 cursor-nw-resize z-20" />
-        <div onPointerDown={handlePointerDown('ne')} className="absolute top-0 right-0 w-2 h-2 cursor-ne-resize z-20" />
-        <div onPointerDown={handlePointerDown('sw')} className="absolute bottom-0 left-0 w-2 h-2 cursor-sw-resize z-20" />
-        <div onPointerDown={handlePointerDown('se')} className="absolute bottom-0 right-0 w-2 h-2 cursor-se-resize z-20" />
+        {/* Resize handles — only active when not maximized. */}
+        {!maximized && <>
+          <div onPointerDown={handlePointerDown('n')} className="absolute top-0 left-2 right-2 h-1 cursor-n-resize z-20" />
+          <div onPointerDown={handlePointerDown('s')} className="absolute bottom-0 left-2 right-2 h-1 cursor-s-resize z-20" />
+          <div onPointerDown={handlePointerDown('e')} className="absolute top-2 bottom-2 right-0 w-1 cursor-e-resize z-20" />
+          <div onPointerDown={handlePointerDown('w')} className="absolute top-2 bottom-2 left-0 w-1 cursor-w-resize z-20" />
+          <div onPointerDown={handlePointerDown('nw')} className="absolute top-0 left-0 w-2 h-2 cursor-nw-resize z-20" />
+          <div onPointerDown={handlePointerDown('ne')} className="absolute top-0 right-0 w-2 h-2 cursor-ne-resize z-20" />
+          <div onPointerDown={handlePointerDown('sw')} className="absolute bottom-0 left-0 w-2 h-2 cursor-sw-resize z-20" />
+          <div onPointerDown={handlePointerDown('se')} className="absolute bottom-0 right-0 w-2 h-2 cursor-se-resize z-20" />
+        </>}
 
         {/* Title bar */}
         <div
-          className={`flex items-center justify-between text-white px-2 h-7 shrink-0 cursor-default transition-colors duration-150 ${focusedWindow === 'formulary' ? 'bg-[#C85A00]' : 'bg-[#7A3A00]'}`}
+          className={`flex items-center justify-between text-white px-2 h-7 shrink-0 transition-colors duration-150 ${maximized ? 'cursor-default' : 'cursor-default'} ${focusedWindow === 'formulary' ? 'bg-[#C85A00]' : 'bg-[#7A3A00]'}`}
           onPointerDown={handlePointerDown('move')}
+          onDoubleClick={toggleMaximize}
         >
           <div className="flex items-center gap-1.5">
-          {/* App icon — triple-click easter egg */}
+          {/* App icon — triple-click easter egg. Stop pointerdown + dblclick
+              so the title bar's drag-to-move and double-click-to-maximize
+              don't intercept the triple-click sequence. */}
           <div
             className="w-4 h-4 bg-white/20 border border-white/40 flex items-center justify-center text-[8px] cursor-default"
+            onPointerDown={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); adminClick.handleClick() }}
             style={isAdminMode ? { boxShadow: '0 0 4px #E8C44C' } : undefined}
           >Rx</div>
           <span className="text-sm font-bold font-mono tracking-tight pointer-events-none">PharmNet Inpatient Formulary Manager</span>
         </div>
         <div className="flex gap-1" onPointerDown={e => e.stopPropagation()}>
-          <button onPointerDown={e => { e.stopPropagation(); minimizeWindow('formulary') }} className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none">─</button>
-          <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none opacity-50 pointer-events-none cursor-not-allowed">□</button>
-          <button className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none opacity-50 pointer-events-none cursor-not-allowed">✕</button>
+          <button
+            onPointerDown={e => { e.stopPropagation(); minimizeWindow('formulary') }}
+            className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none hover:bg-[#E0DBD0]"
+            title="Minimize"
+            aria-label="Minimize"
+          >
+            ─
+          </button>
+          <button
+            onClick={toggleMaximize}
+            onPointerDown={e => e.stopPropagation()}
+            className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none hover:bg-[#E0DBD0]"
+            title={maximized ? 'Restore' : 'Maximize'}
+            aria-label={maximized ? 'Restore' : 'Maximize'}
+          >
+            {maximized ? '❐' : '□'}
+          </button>
+          <button
+            onClick={closeFormulary}
+            onPointerDown={e => e.stopPropagation()}
+            className="w-5 h-5 border border-white/40 bg-[#D4D0C8] text-black flex items-center justify-center text-[10px] leading-none hover:bg-[#E5A0A0]"
+            title="Close — reopen from the desktop icon"
+            aria-label="Close"
+          >
+            ✕
+          </button>
         </div>
       </div>
 
@@ -495,10 +686,20 @@ export default function PharmNetFormulary() {
 
       {/* Toolbar */}
       <div className="flex items-center gap-1 bg-[#D4D0C8] px-2 py-1 border-b border-[#808080] shrink-0">
+        {/* Diagnosis Scanner button — primary action, visually distinct */}
+        <button
+          onClick={() => { setScannerInitialInput(""); setIsScannerOpen(true); focusWindow('scanner') }}
+          className="text-[10px] font-mono font-bold px-2 h-6 border border-[#316AC5] bg-[#E5EEF7] hover:bg-[#CFE0F4] active:bg-[#B5D0E8] text-[#316AC5] flex items-center gap-1 ml-1"
+          title="Open the Formulary Diagnosis Scanner — scan a barcode or paste an NDC for facility-aware diagnosis"
+        >
+          <ScanBarcode size={14} />
+          Scan barcode
+        </button>
+        <div className="w-px h-4 bg-[#808080] mx-1" />
         {/* Category Manager button */}
         <button
           onClick={() => { setIsCategoryManagerOpen(true); focusWindow('categories') }}
-          className="text-[10px] font-mono px-1.5 h-5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] flex items-center gap-0.5 ml-1"
+          className="text-[10px] font-mono px-1.5 h-5 border border-[#808080] bg-[#D4D0C8] hover:bg-[#E8E8E0] active:bg-[#B0A898] flex items-center gap-0.5"
           title="Category Manager"
         >
           🏷 Categories
@@ -759,6 +960,7 @@ export default function PharmNetFormulary() {
         onClose={() => { setIsSearchModalOpen(false); if (focusedWindow === 'search') setFocusedWindow('formulary') }}
         onCreateTask={canAdmin ? handleCreateTaskFromSearch : undefined}
         onOpenCategoryManager={() => { setIsCategoryManagerOpen(true); focusWindow('categories') }}
+        onOpenScanner={(seed) => { setScannerInitialInput(seed ?? ""); setIsScannerOpen(true); focusWindow('scanner') }}
         onSelect={(item) => {
           setSelectedItemPreview(item)
           setIsSearchModalOpen(false)
@@ -871,14 +1073,51 @@ export default function PharmNetFormulary() {
         isAdminMode={canAdmin}
       />
 
+      {/* Formulary Diagnosis Scanner Window */}
+      <ScannerWindow
+        open={isScannerOpen}
+        minimized={minimizedWindows.has('scanner')}
+        focused={focusedWindow === 'scanner' && !minimizedWindows.has('scanner')}
+        onFocus={() => focusWindow('scanner')}
+        onMinimize={() => minimizeWindow('scanner')}
+        onClose={() => { setIsScannerOpen(false); if (focusedWindow === 'scanner') setFocusedWindow('formulary') }}
+        initialInput={scannerInitialInput}
+      />
+
+      {/* Admin: Extract Changeset Viewer */}
+      <ExtractChangesWindow
+        open={isExtractChangesOpen}
+        minimized={minimizedWindows.has('extract-changes')}
+        focused={focusedWindow === 'extract-changes' && !minimizedWindows.has('extract-changes')}
+        onFocus={() => focusWindow('extract-changes')}
+        onMinimize={() => minimizeWindow('extract-changes')}
+        onClose={() => { setIsExtractChangesOpen(false); if (focusedWindow === 'extract-changes') setFocusedWindow('formulary') }}
+      />
+
+      {/* Admin: Standardization Backlog */}
+      <StandardizationBacklogWindow
+        open={isStandardizationBacklogOpen}
+        minimized={minimizedWindows.has('standardization-backlog')}
+        focused={focusedWindow === 'standardization-backlog' && !minimizedWindows.has('standardization-backlog')}
+        onFocus={() => focusWindow('standardization-backlog')}
+        onMinimize={() => minimizeWindow('standardization-backlog')}
+        onClose={() => { setIsStandardizationBacklogOpen(false); if (focusedWindow === 'standardization-backlog') setFocusedWindow('formulary') }}
+      />
+
     {/* Windows 95 Taskbar */}
     <TaskBar
       openWindows={new Set<WindowId>([
-        'formulary',
+        // Formulary stays in the taskbar even when minimized, but disappears
+        // when the user explicitly closes (X button) — they reopen via the
+        // desktop icon or Start menu.
+        ...(formularyClosed ? [] : ['formulary' as WindowId]),
         ...(isSearchModalOpen ? ['search' as WindowId] : []),
         ...(isCategoryManagerOpen ? ['categories' as WindowId] : []),
         ...(isPatternManagerOpen ? ['patterns' as WindowId] : []),
         ...(isTaskManagerOpen ? ['tasks' as WindowId] : []),
+        ...(isScannerOpen ? ['scanner' as WindowId] : []),
+        ...(isExtractChangesOpen ? ['extract-changes' as WindowId] : []),
+        ...(isStandardizationBacklogOpen ? ['standardization-backlog' as WindowId] : []),
       ])}
       minimizedWindows={minimizedWindows}
       focusedWindow={focusedWindow}
@@ -886,18 +1125,24 @@ export default function PharmNetFormulary() {
       isMaintainerMode={isMaintainerMode}
       taskSummary={taskSummary}
       onFocusWindow={(id) => {
-        if (id === 'formulary') focusWindow('formulary')
+        if (id === 'formulary') openFormulary()
         else if (id === 'search' && isSearchModalOpen) focusWindow('search')
         else if (id === 'categories' && isCategoryManagerOpen) focusWindow('categories')
         else if (id === 'patterns' && isPatternManagerOpen) focusWindow('patterns')
         else if (id === 'tasks' && isTaskManagerOpen) focusWindow('tasks')
+        else if (id === 'scanner' && isScannerOpen) focusWindow('scanner')
+        else if (id === 'extract-changes' && isExtractChangesOpen) focusWindow('extract-changes')
+        else if (id === 'standardization-backlog' && isStandardizationBacklogOpen) focusWindow('standardization-backlog')
       }}
       onStartMenuAction={(id) => {
-        if (id === 'formulary') focusWindow('formulary')
+        if (id === 'formulary') openFormulary()
         else if (id === 'search') { setIsSearchModalOpen(true); focusWindow('search') }
         else if (id === 'categories') { setIsCategoryManagerOpen(true); focusWindow('categories') }
         else if (id === 'patterns') { setIsPatternManagerOpen(true); focusWindow('patterns') }
         else if (id === 'tasks') { setIsTaskManagerOpen(true); focusWindow('tasks') }
+        else if (id === 'scanner') { setScannerInitialInput(""); setIsScannerOpen(true); focusWindow('scanner') }
+        else if (id === 'extract-changes') { setIsExtractChangesOpen(true); focusWindow('extract-changes') }
+        else if (id === 'standardization-backlog') { setIsStandardizationBacklogOpen(true); focusWindow('standardization-backlog') }
       }}
       onClockClick={maintainerClick.handleClick}
       onDeactivateAdmin={deactivateAdmin}

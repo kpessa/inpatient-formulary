@@ -13,6 +13,7 @@ import {
 import { FormField } from "./FormField"
 import type { FormularyItem, LintResultMap } from "@/lib/types"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import { decodeVbTokens } from "@/lib/text-tokens"
 import { FieldLintTooltip } from "./FieldLintTooltip"
 import type { FieldValueMap } from "@/lib/formulary-diff"
 
@@ -168,7 +169,7 @@ export function OEDefaultsTab({ item, highlightedFields, fieldValueMap, lintViol
               <div className="flex gap-4 items-stretch">
                 <div className="flex flex-1 gap-2 border border-[#808080]">
                   <textarea
-                    value={d?.notes1 ?? ""}
+                    value={decodeVbTokens(d?.notes1)}
                     readOnly
                     className="flex-1 text-xs font-mono p-1 resize-none border-0 outline-none w-full h-full bg-white"
                   />
@@ -207,7 +208,7 @@ export function OEDefaultsTab({ item, highlightedFields, fieldValueMap, lintViol
               <div className="flex gap-4 items-stretch mt-2">
                 <div className="flex flex-1 gap-2 border border-[#808080]">
                   <textarea
-                    value={d?.notes2 ?? ""}
+                    value={decodeVbTokens(d?.notes2)}
                     readOnly
                     className="flex-1 text-xs font-mono p-1 resize-none border-0 outline-none w-full h-full bg-white"
                   />

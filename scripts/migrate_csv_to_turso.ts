@@ -1,10 +1,13 @@
 /**
  * Migrate CSV extract files directly to Turso.
  *
- * File → domain mapping:
- *   c152e_extract.csv  →  region: "east",    environment: "cert"
- *   p152w_extract.csv  →  region: "west",    environment: "prod"
- *   p152c_extract.csv  →  region: "central", environment: "prod"
+ * File → domain mapping (naming convention: {env}_{region}.csv):
+ *   cert_east.csv     →  region: "east",    environment: "cert"
+ *   cert_central.csv  →  region: "central", environment: "cert"
+ *   cert_west.csv     →  region: "west",    environment: "cert"
+ *   prod_east.csv     →  region: "east",    environment: "prod"
+ *   prod_central.csv  →  region: "central", environment: "prod"
+ *   prod_west.csv     →  region: "west",    environment: "prod"
  *
  * Usage:
  *   tsx scripts/migrate_csv_to_turso.ts
@@ -41,9 +44,12 @@ const GROUP_BATCH_SIZE = 50
 const SUPPLY_BATCH_SIZE = 200
 
 const FILES: { file: string; region: string; env: string }[] = [
-  { file: 'c152e_extract.csv', region: 'east',    env: 'cert' },
-  { file: 'p152w_extract.csv', region: 'west',    env: 'prod' },
-  { file: 'p152c_extract.csv', region: 'central', env: 'prod' },
+  { file: 'cert_east.csv',    region: 'east',    env: 'cert' },
+  { file: 'cert_central.csv', region: 'central', env: 'cert' },
+  { file: 'cert_west.csv',    region: 'west',    env: 'cert' },
+  { file: 'prod_east.csv',    region: 'east',    env: 'prod' },
+  { file: 'prod_central.csv', region: 'central', env: 'prod' },
+  { file: 'prod_west.csv',    region: 'west',    env: 'prod' },
 ]
 
 const GROUP_COLS = [

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react"
 import { createPortal } from "react-dom"
+import { ScanBarcode } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -29,6 +30,7 @@ import { TherapeuticClassPicker } from "./TherapeuticClassPicker"
 import { tcDescendants, tcLabel } from "@/lib/therapeutic-class-map"
 import { FieldFilterSelect, FilterChips, type AdvFilterItem } from "./FieldFilterSelect"
 import { FieldDiffTooltip } from "./FieldDiffTooltip"
+import { decodeVbTokens } from "@/lib/text-tokens"
 import { type ClauseToken, type OpToken, type QueryToken, type QueryState, parseQueryToState, serializeQueryCompact, evaluateQueryState, rulesToQueryState, QueryBuilder } from "./QueryBuilder"
 
 type UnifiedResult = SearchResult & { _allDomains: string[] }
@@ -94,6 +96,8 @@ interface SearchModalProps {
   onSelect: (item: FormularyItem) => void
   onCreateTask?: (drugKey: string, drugDescription: string, fieldName?: string, fieldLabel?: string, domainValues?: DomainValue[], groupId?: string) => void
   onOpenCategoryManager?: () => void
+  /** Open the Formulary Diagnosis Scanner. The optional `initialInput` seeds the scanner's barcode/NDC input. */
+  onOpenScanner?: (initialInput?: string) => void
   categoryTrigger?: { categoryId: string; seq: number } | null
   extractAge?: { date: string; daysAgo: number } | null
 }
@@ -582,7 +586,7 @@ function classifyActiveFields(q: string, activeFields: Set<string>): Set<string>
   return new Set(candidates.filter(f => activeFields.has(f)))
 }
 
-export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, categoryTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask, onOpenCategoryManager, extractAge }: SearchModalProps) {
+export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidden, searchTrigger, violationFilterTrigger, categoryTrigger, scope: initialScope, availableDomains, onSelect, onCreateTask, onOpenCategoryManager, onOpenScanner, extractAge }: SearchModalProps) {
   const [activeTab, setActiveTab] = useState("main")
   const [searchValue, setSearchValue] = useState("")
   const [inputValue, setInputValue] = useState("")  // what TokenSearchInput displays (cleared on submit)
@@ -2066,6 +2070,16 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                 >
                   Search
                 </button>
+                {onOpenScanner && (
+                  <button
+                    onClick={() => onOpenScanner(inputValue.trim())}
+                    className="h-6 px-3 border border-[#316AC5] bg-[#E5EEF7] hover:bg-[#CFE0F4] active:bg-[#B5D0E8] text-[#316AC5] flex items-center justify-center gap-1 text-xs font-bold shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset]"
+                    title="Open the Formulary Diagnosis Scanner — scan a barcode or look up an NDC"
+                  >
+                    <ScanBarcode size={12} />
+                    Scan barcode
+                  </button>
+                )}
                 <button
                   onClick={() => setShowAdvanced(v => !v)}
                   className={`h-6 px-2 border text-xs flex items-center gap-1 shadow-[1px_1px_0px_#FFFFFF_inset,-1px_-1px_0px_#808080_inset] ${
@@ -3116,7 +3130,7 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                     ))}
                   </div>
                   {lintTooltip.domainValues && lintTooltip.domainValues.length > 0 && (() => {
-                    const base = lintTooltip.domainValues[0].value
+                    const base = decodeVbTokens(lintTooltip.domainValues[0].value)
                     return (
                       <>
                         <div className="border-t border-[#808080]" />
@@ -3125,7 +3139,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                         </div>
                         <div className="p-1 space-y-0.5">
                           {lintTooltip.domainValues.map((dv, i) => {
-                            const segments = i === 0 ? null : charDiff(base, dv.value)
+                            const decoded = decodeVbTokens(dv.value)
+                            const segments = i === 0 ? null : charDiff(base, decoded)
                             return (
                               <div key={dv.domain} className="flex items-start gap-1.5">
                                 <span
@@ -3134,15 +3149,15 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                                 >
                                   {dv.badge}
                                 </span>
-                                <span className="text-[10px] font-mono text-black leading-tight whitespace-nowrap">
-                                  {dv.value
+                                <span className="text-[10px] font-mono text-black leading-tight whitespace-pre-wrap break-words min-w-0">
+                                  {decoded
                                     ? segments
                                       ? segments.map((seg, j) =>
                                           seg.diff
                                             ? <mark key={j} className="bg-amber-300 text-black not-italic px-0">{seg.text}</mark>
                                             : <span key={j}>{seg.text}</span>
                                         )
-                                      : dv.value
+                                      : decoded
                                     : <span className="text-[#808080] italic">—</span>
                                   }
                                 </span>

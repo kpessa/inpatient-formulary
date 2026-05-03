@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 
 // ---------------------------------------------------------------------------
 // Multi-click detection hook
@@ -30,7 +30,19 @@ export function useMultiClick(threshold: number, windowMs: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Mode persistence
+// Mode persistence — module-level singleton store.
+//
+// The previous implementation kept admin/maintainer flags in a per-component
+// `useState`, so each consumer of `useEasterEggModes()` (page.tsx title bar,
+// ScannerWindow, etc.) had its own copy. Toggling in one component didn't
+// notify the others, and they each hydrated independently from localStorage
+// at mount — so a window that mounted while admin=true could keep showing it
+// long after another window toggled admin=false.
+//
+// The store below lives at module scope. Consumers subscribe via
+// `useSyncExternalStore`, so any toggle propagates to every mounted window
+// in the same render tick. Only one localStorage read (at module load) and
+// one write per toggle.
 // ---------------------------------------------------------------------------
 const STORAGE_KEY = 'pharmnet-modes'
 
@@ -39,50 +51,98 @@ interface ModeState {
   maintainer: boolean
 }
 
+let adminState = false
+let maintainerState = false
+const listeners = new Set<() => void>()
+
+// Eager hydration on first import on the client. Server-side imports are a
+// no-op (typeof window check), and `getServerSnapshot` returns false to keep
+// SSR + first-paint hydration consistent — the real value swaps in after
+// `useSyncExternalStore` mounts and starts using `getSnapshot`.
+if (typeof window !== 'undefined') {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) ?? '{}',
+    ) as Partial<ModeState>
+    adminState = !!stored.administrator
+    maintainerState = !!stored.maintainer
+  } catch {
+    // localStorage unavailable / parse failed — leave defaults.
+  }
+}
+
+function persist() {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ administrator: adminState, maintainer: maintainerState }),
+    )
+  } catch {
+    // localStorage unavailable — drop silently.
+  }
+}
+
+function notify() {
+  for (const l of listeners) l()
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+function getAdminSnapshot() {
+  return adminState
+}
+
+function getMaintainerSnapshot() {
+  return maintainerState
+}
+
+function getServerSnapshot() {
+  return false
+}
+
+const toggleAdmin = () => {
+  adminState = !adminState
+  persist()
+  notify()
+}
+
+const toggleMaintainer = () => {
+  maintainerState = !maintainerState
+  persist()
+  notify()
+}
+
+const deactivateAdmin = () => {
+  if (!adminState) return
+  adminState = false
+  persist()
+  notify()
+}
+
+const deactivateMaintainer = () => {
+  if (!maintainerState) return
+  maintainerState = false
+  persist()
+  notify()
+}
+
 export function useEasterEggModes() {
-  const [isAdminMode, setIsAdminMode] = useState(false)
-  const [isMaintainerMode, setIsMaintainerMode] = useState(false)
-
-  // Hydrate from localStorage
-  useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<ModeState>
-      if (stored.administrator) setIsAdminMode(true)
-      if (stored.maintainer) setIsMaintainerMode(true)
-    } catch {}
-  }, [])
-
-  const persist = useCallback((admin: boolean, maintainer: boolean) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ administrator: admin, maintainer }))
-    } catch {}
-  }, [])
-
-  const toggleAdmin = useCallback(() => {
-    setIsAdminMode(prev => {
-      const next = !prev
-      setIsMaintainerMode(m => { persist(next, m); return m })
-      return next
-    })
-  }, [persist])
-
-  const toggleMaintainer = useCallback(() => {
-    setIsMaintainerMode(prev => {
-      const next = !prev
-      setIsAdminMode(a => { persist(a, next); return a })
-      return next
-    })
-  }, [persist])
-
-  const deactivateAdmin = useCallback(() => {
-    setIsAdminMode(false)
-    setIsMaintainerMode(m => { persist(false, m); return m })
-  }, [persist])
-
-  const deactivateMaintainer = useCallback(() => {
-    setIsMaintainerMode(false)
-    setIsAdminMode(a => { persist(a, false); return a })
-  }, [persist])
+  const isAdminMode = useSyncExternalStore(
+    subscribe,
+    getAdminSnapshot,
+    getServerSnapshot,
+  )
+  const isMaintainerMode = useSyncExternalStore(
+    subscribe,
+    getMaintainerSnapshot,
+    getServerSnapshot,
+  )
 
   return {
     isAdminMode,

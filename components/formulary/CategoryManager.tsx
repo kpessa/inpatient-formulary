@@ -15,12 +15,24 @@ const COLOR_PALETTE = [
 ]
 
 const RULE_FIELDS: { value: CategoryRule['field']; label: string }[] = [
+  // Structured / coded fields — match against canonical values (e.g. TC '71'
+  // for CNS stimulants, dispense_category 'IV SYRINGE', etc).
   { value: 'dispenseCategory', label: 'Dispense Category' },
   { value: 'therapeuticClass', label: 'Therapeutic Class' },
   { value: 'dosageForm',       label: 'Dosage Form' },
   { value: 'route',            label: 'Route' },
   { value: 'status',           label: 'Status' },
   { value: 'strength',         label: 'Strength' },
+  // Legal-status / CSA-schedule field — values include 'OTC', 'Rx', and
+  // controlled-substance schedule codes (CII, CIII, CIV, CV).
+  { value: 'legalStatus',      label: 'Legal Status' },
+  // Free-text identifier fields — useful for description-pattern categories
+  // like "Half-tab" (description contains "(Half of "). Schema and types
+  // already supported these; previously hidden from the UI dropdown.
+  { value: 'description',      label: 'Description' },
+  { value: 'genericName',      label: 'Generic Name' },
+  { value: 'mnemonic',         label: 'Mnemonic' },
+  { value: 'brandName',        label: 'Brand Name' },
 ]
 
 const RULE_OPERATORS: { value: CategoryRule['operator']; label: string }[] = [

@@ -330,7 +330,7 @@ export interface CategoryRule {
   id: string
   categoryId: string
   field: 'dispenseCategory' | 'therapeuticClass' | 'dosageForm' | 'route' | 'status' | 'strength'
-        | 'description' | 'genericName' | 'mnemonic' | 'brandName'
+        | 'description' | 'genericName' | 'mnemonic' | 'brandName' | 'legalStatus'
   operator: 'equals' | 'contains' | 'starts_with' | 'ends_with' | 'matches_regex' | 'in'
   value: string
   negated?: boolean

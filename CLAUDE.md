@@ -5,13 +5,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-pnpm dev        # Start development server
+pnpm dev        # Start development server (foreground)
 pnpm build      # Build for production
 pnpm start      # Start production server
 pnpm lint       # Run ESLint
 ```
 
 No test framework is configured.
+
+## Always-on dev server (launchd)
+
+A `launchd` LaunchAgent at `scripts/launchd/com.kurtpessa.inpatient-formulary.dev.plist` runs `next dev` automatically on login. The agent stays up across crashes (KeepAlive on non-zero exit, throttled 30s) and writes logs to `~/Library/Logs/InpatientFormulary/dev-{stdout,stderr}.log`.
+
+```bash
+pnpm dev:install    # one-time setup: symlink plist into ~/Library/LaunchAgents and bootstrap
+pnpm dev:restart    # SIGTERM + auto-relaunch (use after env/config/dep changes)
+pnpm dev:logs       # tail both log files
+pnpm dev:status     # launchctl print summary
+pnpm dev:uninstall  # bootout + remove agent (logs preserved)
+```
+
+**When to restart vs. trust HMR.** Most code edits (components, libs, route handlers, types, styles) are picked up by Next.js HMR — *do not restart*. Restart only when:
+
+- `next.config.*` changes
+- `.env*` files change (Next.js reads them at boot)
+- Package install / removal (`pnpm add`, `pnpm remove`)
+- The dev server has visibly wedged (HMR errors not clearing, port stuck)
+- A new API route's TypeScript fails to register without a rebuild
+
+If Claude is editing from a sandboxed environment that can't reach `launchctl` directly, instruct the user to run `pnpm dev:restart` themselves rather than trying to spawn a host shell.
 
 ## Architecture
 

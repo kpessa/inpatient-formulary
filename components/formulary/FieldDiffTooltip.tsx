@@ -2,6 +2,7 @@
 import { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { DomainValue } from '@/lib/formulary-diff'
+import { decodeVbTokens } from '@/lib/text-tokens'
 
 // Finds common prefix/suffix and marks the middle segment as changed
 function charDiff(base: string, cmp: string): Array<{ text: string; diff: boolean }> {
@@ -34,7 +35,7 @@ export function FieldDiffTooltip({ values, fieldName, fieldLabel, onCreateTask, 
   const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null)
   if (!values?.length) return <div style={style} className={className}>{children}</div>
 
-  const baseValue = values[0].value
+  const baseValue = decodeVbTokens(values[0].value)
 
   return (
     <div
@@ -72,7 +73,11 @@ export function FieldDiffTooltip({ values, fieldName, fieldLabel, onCreateTask, 
           </div>
           <div className="p-1 space-y-0.5">
             {values.map((dv, i) => {
-              const segments = i === 0 ? null : charDiff(baseValue, dv.value)
+              // Decode legacy {VBCRLF}-style escapes so the tooltip shows real
+              // line breaks; charDiff runs on the decoded form so segments
+              // don't accidentally split across token characters.
+              const decoded = decodeVbTokens(dv.value)
+              const segments = i === 0 ? null : charDiff(baseValue, decoded)
               return (
                 <div key={dv.domain} className="flex items-start gap-1.5">
                   <span
@@ -81,15 +86,15 @@ export function FieldDiffTooltip({ values, fieldName, fieldLabel, onCreateTask, 
                   >
                     {dv.badge}
                   </span>
-                  <span className="text-[10px] font-mono text-black leading-tight whitespace-nowrap">
-                    {dv.value
+                  <span className="text-[10px] font-mono text-black leading-tight whitespace-pre-wrap break-words min-w-0">
+                    {decoded
                       ? segments
                         ? segments.map((seg, j) =>
                             seg.diff
                               ? <mark key={j} className="bg-amber-300 text-black not-italic px-0">{seg.text}</mark>
                               : <span key={j}>{seg.text}</span>
                           )
-                        : dv.value
+                        : decoded
                       : <span className="text-[#808080] italic">—</span>
                     }
                   </span>
