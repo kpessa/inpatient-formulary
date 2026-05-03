@@ -36,16 +36,26 @@ function buildClient(): Client {
   const dbUrl = process.env.DATABASE_URL
   const isRemote = !!dbUrl && (dbUrl.startsWith('libsql://') || dbUrl.startsWith('https://') || dbUrl.startsWith('wss://'))
 
-  if (isRemote) {
-    // **Embedded replica path** (production / any Turso-backed env).
+  // Embedded-replica is the right choice for the long-running launchd-managed
+  // dev server (persistent disk, replica file survives restarts, syncs in the
+  // background, sub-ms reads). It's the WRONG choice for Vercel serverless:
+  //   - Each function container is ephemeral → no persistent disk
+  //   - First call would do a full ~50MB sync from Turso, blowing past the
+  //     function timeout and memory budget
+  //   - $HOME on Vercel doesn't point at a writable Mac-style cache dir
+  // Detect serverless via the `VERCEL` env var that Vercel injects, and
+  // fall back to a direct Turso connection there. Reads go over the wire
+  // but Turso's edge replicas keep latency reasonable for serverless use.
+  const isServerless = !!process.env.VERCEL
+
+  if (isRemote && !isServerless) {
+    // **Embedded replica path** (local dev / persistent server).
     //
     // The local file is the read substrate — every `db.execute()` /
     // `db.batch()` SELECT hits this file (sub-ms, no network). Writes
     // (INSERT/UPDATE/DELETE) go to `syncUrl` (the remote Turso DB) AND
     // update the local file in the same call so reads-your-writes is
-    // preserved. `syncInterval: 60` triggers background sync every 60s
-    // so updates from OTHER writers (e.g. Turso web UI, peer apps) flow
-    // into the local replica without explicit `db.sync()` calls.
+    // preserved. `syncInterval: 60` triggers background sync every 60s.
     //
     // First-request cost: one full sync of the remote DB into the local
     // file (~50MB → seconds on a fast connection). Subsequent reads are
@@ -61,6 +71,14 @@ function buildClient(): Client {
       syncUrl: dbUrl,
       authToken: process.env.TURSO_AUTH_TOKEN,
       syncInterval: 60,
+    })
+  }
+
+  if (isRemote) {
+    // Direct Turso connection for serverless — no local replica.
+    return createClient({
+      url: dbUrl,
+      authToken: process.env.TURSO_AUTH_TOKEN,
     })
   }
 
