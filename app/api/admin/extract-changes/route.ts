@@ -81,6 +81,12 @@ export async function GET(req: NextRequest) {
     loadCategories(db),
   ])
 
+  // Cache aggressively at the Vercel CDN. The data only changes when a new
+  // extract is deployed (every few months) AND deploy-db.sh runs the compute
+  // step at the end. s-maxage=600 → CDN caches for 10 min; stale-while-
+  // revalidate=60 → serves stale up to 1 min while refetching in the
+  // background. Direct-to-Turso queries are slow on serverless (~28s for
+  // this 2.6MB response), so the cache hit is a ~280x speedup.
   return NextResponse.json({
     run: {
       id: runId,
@@ -125,5 +131,7 @@ export async function GET(req: NextRequest) {
         categories: matchedCats,
       }
     }),
+  }, {
+    headers: { 'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=60' },
   })
 }

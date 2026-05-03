@@ -264,5 +264,11 @@ export async function GET() {
     })
   }
 
-  return NextResponse.json({ run_id: runId, rows })
+  // Cache aggressively at the Vercel CDN. Same rationale as the
+  // /api/admin/extract-changes route — data changes only when a new
+  // extract is deployed; the SQL has correlated subqueries that take
+  // ~20-30s direct-to-Turso. Cache hit is ~100ms.
+  return NextResponse.json({ run_id: runId, rows }, {
+    headers: { 'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=60' },
+  })
 }
