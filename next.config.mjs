@@ -10,10 +10,10 @@ const nextConfig = {
     "/api/formulary/search": ["./data/**/*"],
     "/api/formulary/item": ["./data/**/*"],
     // CDM Request xlsx download — reads data/cdm_request_template.xlsx at
-    // runtime to produce the autofilled form. Without this entry, Vercel's
-    // file tracer drops the template from the deploy bundle and ?format=xlsx
-    // fails with "Cannot access file …".
-    "/api/cdm-request/[ndc]": ["./data/cdm_request_template.xlsx"],
+    // runtime to produce the autofilled form. Use the same broad glob the
+    // other formulary routes use (./data/**/*) — narrower entries with the
+    // single-file path didn't trace under Next.js 16 + Turbopack.
+    "/api/cdm-request/[ndc]": ["./data/**/*"],
   },
 }
 
