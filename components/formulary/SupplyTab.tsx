@@ -11,6 +11,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import type { FormularyItem, SupplyRecord } from "@/lib/types"
 import type { FieldValueMap, DomainRecord, DomainValue } from "@/lib/formulary-diff"
 import { useNdcSources } from "@/lib/use-ndc-sources"
@@ -92,6 +99,26 @@ function charDiff(base: string, cmp: string): Array<{ text: string; diff: boolea
 }
 
 // Expandable multi-domain view — one row per NDC, expandable when diffs exist
+/** Strip hyphens from a 5-4-2 NDC ("12345-6789-01" → "12345678901"). Multum
+ *  CCL queries against `mi.value in (...)` typically use the unhyphenated form. */
+function stripDashes(ndc: string): string {
+  return ndc.replace(/-/g, '')
+}
+
+/** Format a list of NDCs as `("ndc1", "ndc2", …)` — paste-ready for SQL/CCL
+ *  IN clauses. Empty list produces `()` so the user can see something happened. */
+function copyNdcsAsQuotedList(ndcs: readonly string[]): void {
+  const body = ndcs.map(n => `"${n}"`).join(', ')
+  copyToClipboard(`(${body})`)
+}
+
+function copyToClipboard(text: string): void {
+  navigator.clipboard?.writeText(text).catch(() => {
+    // Clipboard can fail in non-secure contexts (HTTP non-localhost).
+    // No silent-failure UI yet — keep simple; user will notice.
+  })
+}
+
 function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: DomainRecord[]; onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void }) {
   const [selectedNdc, setSelectedNdc] = useState<string | null>(null)
   const [expandedNdcs, setExpandedNdcs] = useState<Set<string>>(new Set())
@@ -197,7 +224,40 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-6" />
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8 text-center">Act</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8 text-center">1*</TableHead>
-              <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-36">NDC</TableHead>
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <TableHead
+                    className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-36 cursor-context-menu"
+                    title="Right-click for export options"
+                  >
+                    NDC
+                  </TableHead>
+                </ContextMenuTrigger>
+                <ContextMenuContent
+                  className="font-mono text-xs z-[9999]"
+                  collisionPadding={16}
+                >
+                  <ContextMenuItem
+                    onSelect={() => copyNdcsAsQuotedList(visibleNdcs)}
+                    title='("ndc1", "ndc2", …) — drop into a Discern Explorer IN clause'
+                  >
+                    Copy as quoted list (hyphenated)
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => copyNdcsAsQuotedList(visibleNdcs.map(stripDashes))}
+                    title='("ndc1nodashes", …) — for Multum CCL where mi.value uses 11-digit form'
+                  >
+                    Copy as quoted list (no dashes)
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={() => copyToClipboard(visibleNdcs.join(', '))}>
+                    Copy as plain CSV
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => copyToClipboard(visibleNdcs.join('\n'))}>
+                    Copy one-per-line
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
@@ -406,7 +466,40 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
             <TableRow className="border-b border-[#808080]">
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8"></TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-8">1*</TableHead>
-              <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-32">Drug ID</TableHead>
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <TableHead
+                    className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-32 cursor-context-menu"
+                    title="Right-click for export options"
+                  >
+                    Drug ID
+                  </TableHead>
+                </ContextMenuTrigger>
+                <ContextMenuContent
+                  className="font-mono text-xs z-[9999]"
+                  collisionPadding={16}
+                >
+                  <ContextMenuItem
+                    onSelect={() => copyNdcsAsQuotedList(allNdcs)}
+                    title='("ndc1", "ndc2", …) — drop into a Discern Explorer IN clause'
+                  >
+                    Copy as quoted list (hyphenated)
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => copyNdcsAsQuotedList(allNdcs.map(stripDashes))}
+                    title='("ndc1nodashes", …) — for Multum CCL where mi.value uses 11-digit form'
+                  >
+                    Copy as quoted list (no dashes)
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onSelect={() => copyToClipboard(allNdcs.join(', '))}>
+                    Copy as plain CSV
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => copyToClipboard(allNdcs.join('\n'))}>
+                    Copy one-per-line
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
