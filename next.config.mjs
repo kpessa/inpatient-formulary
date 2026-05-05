@@ -10,10 +10,10 @@ const nextConfig = {
     "/api/formulary/search": ["./data/**/*"],
     "/api/formulary/item": ["./data/**/*"],
     // CDM Request xlsx download — reads data/cdm_request_template.xlsx at
-    // runtime to produce the autofilled form. Use the same broad glob the
-    // other formulary routes use (./data/**/*) — narrower entries with the
-    // single-file path didn't trace under Next.js 16 + Turbopack.
-    "/api/cdm-request/[ndc]": ["./data/**/*"],
+    // runtime. The bracket-delimited dynamic-route key "/api/cdm-request/[ndc]"
+    // is interpreted as a glob character class by Next.js's file tracer
+    // (https://github.com/vercel/next.js/issues/51054), so use a ** wildcard.
+    "/api/cdm-request/**": ["./data/**/*"],
   },
 }
 
