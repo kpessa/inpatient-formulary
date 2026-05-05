@@ -21,7 +21,11 @@ import * as XLSX from 'xlsx'
 import { CDM_CELL_MAP, type CdmFieldPath, getField } from './cellMap'
 import type { CdmRequestPayload } from './types'
 
-const TEMPLATE_PATH = path.join(process.cwd(), 'data', 'cdm_request_template.xlsx')
+// Living in public/ rather than data/ guarantees the file ships with every
+// Vercel deploy without depending on outputFileTracingIncludes — Next.js
+// includes public/ wholesale in the function bundle. Local dev reads from
+// the same path, so behavior is consistent across environments.
+const TEMPLATE_PATH = path.join(process.cwd(), 'public', 'cdm_request_template.xlsx')
 
 export function payloadToXlsx(payload: CdmRequestPayload): Buffer {
   if (!fs.existsSync(TEMPLATE_PATH)) {
