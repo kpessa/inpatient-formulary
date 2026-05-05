@@ -33,10 +33,32 @@ export const MULTUM_TABLE_NAMES = [
   // FDA Orange Book therapeutic-equivalence code dictionary (13 rows).
   // mltm_ndc.orange_book_id joins here for the AB rating + human description.
   'mltm_orange_book',
+  // RxBuilder reference tables — pharmacy-order-entry "most-common"
+  // dose / route / frequency / duration per drug. Small dictionaries first
+  // (referenced by the larger map tables via *_dictionary_id and the order
+  // hub via *_id), then the order hub, then the per-(drug, order) maps.
+  'mltm_rxb_order_category',
+  'mltm_rxb_order_type',
+  'mltm_rxb_dictionary',
+  'mltm_rxb_order',
+  'mltm_rxb_ord_dose_amount',
+  'mltm_rxb_ord_clinical_rte_map',
+  'mltm_rxb_order_frequency_map',
+  'mltm_rxb_order_prn_map',
+  'mltm_rxb_order_dispense_map',
+  'mltm_rxb_order_duration_map',
+  'mltm_rxb_order_instruction_map',
   // Denormalized one-row-per-NDC table — the read source-of-truth for the
   // app. Populated by seedMultumCombined() after the raw tables are loaded.
   // Keep last so it always has up-to-date raw data to draw from.
   'multum_ndc_combined',
+  // Facility identity + contacts. Loaded by scripts/load_facilities.ts into
+  // data/multum.db. Pushed via the same push_multum_to_turso.ts script
+  // (use --tables= to push only this group when iterating).
+  'facilities',
+  'facility_cerner_codes',
+  'facility_aliases',
+  'pharmacy_contacts',
 ] as const
 
 export type MultumTableName = (typeof MULTUM_TABLE_NAMES)[number]
@@ -201,6 +223,122 @@ CREATE TABLE IF NOT EXISTS mltm_orange_book (
   orange_book_description TEXT
 );
 
+-- ============================================================================
+-- RxBuilder (RXB) reference tables — Cerner Millennium pharmacy-order-entry
+-- defaults. Each drug has one or more order definitions in mltm_rxb_order
+-- (keyed by drug_identifier + order_id_nbr → MMDC). Per-order options for
+-- dose, route, frequency, etc. live in the *_map tables; the row(s) flagged
+-- most_common_ind = 1 are the Cerner-recommended defaults that pharmacy
+-- typically wants to autofill into a CDM Request form.
+--
+-- Dictionary IDs in the *_map tables resolve through mltm_rxb_dictionary
+-- (1,980 rows) for human-readable abbreviations + descriptions.
+-- ============================================================================
+
+-- 8-row enum (oral / IV / topical / inhalation / …) used by mltm_rxb_order.
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_category (
+  order_category_id          INTEGER PRIMARY KEY,
+  order_category_description TEXT
+);
+
+-- 3-row enum (Maintenance Dosing / once / …) used by mltm_rxb_order.
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_type (
+  order_type_id          INTEGER PRIMARY KEY,
+  order_type_description TEXT
+);
+
+-- Catch-all dictionary used by every *_map table for unit / route /
+-- frequency / duration / instruction / prn descriptions.
+CREATE TABLE IF NOT EXISTS mltm_rxb_dictionary (
+  dictionary_id  INTEGER PRIMARY KEY,
+  abbreviation   TEXT,
+  description    TEXT
+);
+
+-- Order hub — one row per (drug_identifier, order_id_nbr). MMDC carried here
+-- so an MMDC → orders lookup is a single indexed query.
+CREATE TABLE IF NOT EXISTS mltm_rxb_order (
+  drug_identifier        TEXT NOT NULL,
+  order_id_nbr           INTEGER NOT NULL,
+  main_multum_drug_code  INTEGER,
+  order_category_id      INTEGER,
+  order_type_id          INTEGER,
+  PRIMARY KEY (drug_identifier, order_id_nbr)
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_order_mmdc ON mltm_rxb_order(main_multum_drug_code);
+
+-- Dose amount + dose-quantity option(s) per order. most_common_ind = 1 marks
+-- the default(s) Cerner recommends. Multiple rows per (drug, order) — no PK.
+CREATE TABLE IF NOT EXISTS mltm_rxb_ord_dose_amount (
+  drug_identifier              TEXT NOT NULL,
+  order_id_nbr                 INTEGER NOT NULL,
+  dose_amount                  REAL,
+  dose_unit_dictionary_id      INTEGER,
+  dose_qty_amount              REAL,
+  dose_qty_unit_dictionary_id  INTEGER,
+  most_common_ind              INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_dose_lookup
+  ON mltm_rxb_ord_dose_amount(drug_identifier, order_id_nbr, most_common_ind);
+
+-- Clinical route option(s) per order. alternate_admin_route_ind flags
+-- secondary routes (e.g. NG/PEG vs PO).
+CREATE TABLE IF NOT EXISTS mltm_rxb_ord_clinical_rte_map (
+  drug_identifier               TEXT NOT NULL,
+  order_id_nbr                  INTEGER NOT NULL,
+  clinical_route_dictionary_id  INTEGER,
+  most_common_ind               INTEGER NOT NULL DEFAULT 0,
+  alternate_admin_route_ind     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_rte_lookup
+  ON mltm_rxb_ord_clinical_rte_map(drug_identifier, order_id_nbr, most_common_ind);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_frequency_map (
+  drug_identifier         TEXT NOT NULL,
+  order_id_nbr            INTEGER NOT NULL,
+  frequency_dictionary_id INTEGER,
+  most_common_ind         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_freq_lookup
+  ON mltm_rxb_order_frequency_map(drug_identifier, order_id_nbr, most_common_ind);
+
+-- PRN option(s) per order. Presence of any row signals PRN-eligible; the
+-- prn_dictionary_id resolves to a phrase like "as needed for pain".
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_prn_map (
+  drug_identifier   TEXT NOT NULL,
+  order_id_nbr      INTEGER NOT NULL,
+  prn_dictionary_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_prn_lookup
+  ON mltm_rxb_order_prn_map(drug_identifier, order_id_nbr);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_dispense_map (
+  drug_identifier        TEXT NOT NULL,
+  order_id_nbr           INTEGER NOT NULL,
+  dispense_amount        REAL,
+  dispense_dictionary_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_dispense_lookup
+  ON mltm_rxb_order_dispense_map(drug_identifier, order_id_nbr);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_duration_map (
+  drug_identifier        TEXT NOT NULL,
+  order_id_nbr           INTEGER NOT NULL,
+  duration_amount        REAL,
+  duration_dictionary_id INTEGER,
+  most_common_ind        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_duration_lookup
+  ON mltm_rxb_order_duration_map(drug_identifier, order_id_nbr, most_common_ind);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_instruction_map (
+  drug_identifier           TEXT NOT NULL,
+  order_id_nbr              INTEGER NOT NULL,
+  instruction_dictionary_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_instruction_lookup
+  ON mltm_rxb_order_instruction_map(drug_identifier, order_id_nbr);
+
 -- Denormalized one-row-per-NDC table — the app's read source of truth for
 -- per-NDC reference data. Built from the raw mltm_* tables via the seed
 -- query in scripts/load_multum_xlsx.ts (seedMultumCombined). Going forward,
@@ -245,6 +383,55 @@ CREATE INDEX IF NOT EXISTS idx_multum_combined_mmdc      ON multum_ndc_combined(
 CREATE INDEX IF NOT EXISTS idx_multum_combined_left9     ON multum_ndc_combined(ndc_left_9);
 CREATE INDEX IF NOT EXISTS idx_multum_combined_generic   ON multum_ndc_combined(LOWER(generic_name));
 CREATE INDEX IF NOT EXISTS idx_multum_combined_obsolete  ON multum_ndc_combined(obsolete_date) WHERE obsolete_date IS NULL;
+
+-- Facility identity + contacts (mirrors lib/schema.sql facility section).
+-- Loaded locally by scripts/load_facilities.ts and pushed via
+-- push_multum_to_turso.ts using the shared table list above.
+CREATE TABLE IF NOT EXISTS facilities (
+  mnemonic   TEXT PRIMARY KEY,
+  long_name  TEXT NOT NULL,
+  region     TEXT,
+  is_acute   INTEGER NOT NULL DEFAULT 1,
+  notes      TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS facility_cerner_codes (
+  mnemonic    TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
+  domain      TEXT NOT NULL,
+  code_value  INTEGER NOT NULL,
+  display     TEXT,
+  description TEXT,
+  active_ind  INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (mnemonic, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_facility_cerner_code_value
+  ON facility_cerner_codes(domain, code_value);
+
+CREATE TABLE IF NOT EXISTS facility_aliases (
+  alias_lower TEXT PRIMARY KEY,
+  mnemonic    TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
+  source      TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_facility_aliases_mnemonic
+  ON facility_aliases(mnemonic);
+
+CREATE TABLE IF NOT EXISTS pharmacy_contacts (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  mnemonic     TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
+  role         TEXT NOT NULL,
+  name         TEXT,
+  email        TEXT,
+  phone        TEXT,
+  raw_value    TEXT,
+  source_sheet TEXT NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pharmacy_contacts_mnemonic
+  ON pharmacy_contacts(mnemonic);
+CREATE INDEX IF NOT EXISTS idx_pharmacy_contacts_role
+  ON pharmacy_contacts(role);
 `
 
 /**

@@ -18,7 +18,9 @@ import type { ScanResult } from "@/lib/scanner"
 import type { DiagnosisColor } from "@/lib/diagnosis"
 import { buildDecisionTrace, type DecisionTrace, type TraceCheck } from "@/lib/diagnosis-trace"
 import { StackingTicketDialog } from "./StackingTicketDialog"
+import { CdmRequestDialog } from "./CdmRequestDialog"
 import { NdcDetailPopover } from "./NdcDetailPopover"
+import { ExternalSourcesPanel } from "./ExternalSourcesPanel"
 
 /**
  * Sentinel for "All facilities" mode — passed to the API as empty string
@@ -158,6 +160,11 @@ export function ScannerWindow({
   // the verdict card. Lives in ScannerWindow so the dialog closes cleanly
   // when the user clears or re-scans.
   const [ticketOpen, setTicketOpen] = useState(false)
+  // CDM Request dialog — opens whenever the user has a resolved NDC and wants
+  // to draft an autofilled CDM Request to send to Charge Services. Available
+  // on every diagnosis state since pharmacy may want a request even when the
+  // product is already on formulary (e.g. preparing a related new strength).
+  const [cdmOpen, setCdmOpen] = useState(false)
   const barcodeRef = useRef<HTMLInputElement | null>(null)
   const ndcRef = useRef<HTMLInputElement | null>(null)
 
@@ -451,6 +458,32 @@ export function ScannerWindow({
 
             {!gateActive && result.lookup && <IdentityCard lookup={result.lookup} />}
 
+            {/* Resolved-NDC action bar. Visible whenever we have an NDC the
+                resolver can use — independent of diagnosis state, since
+                pharmacy may want to draft a CDM Request even for already-built
+                products (e.g. preparing a related new strength). */}
+            {!gateActive && result.ndc && (
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => setCdmOpen(true)}
+                  className="h-7 px-2.5 text-[11px] font-mono rounded-none border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DBD0] text-black"
+                  title="Auto-populate the UHS CDM Request Form from this NDC"
+                >
+                  📋 Generate CDM Request
+                </Button>
+              </div>
+            )}
+
+            {/* External sources — DailyMed (NIH SPL), OpenFDA (NDC Directory + Label),
+                and RxNorm (NLM concepts). Lazy-fetches /api/ndc/[ndc]/external on
+                mount; renders availability badges + a coalesced consensus grid + a
+                collapsible per-source drill-in. We render this whenever we have a
+                resolved NDC, even without an in-house lookup, so users still get
+                NIH/FDA/RxNorm feedback for unrecognized NDCs. */}
+            {!gateActive && result.ndc && (
+              <ExternalSourcesPanel ndc={result.ndc} />
+            )}
+
             {!gateActive && result.lookup && (
               <SiblingNdcsPanel
                 lookup={result.lookup}
@@ -487,6 +520,18 @@ export function ScannerWindow({
           open={ticketOpen}
           onOpenChange={setTicketOpen}
           result={result}
+        />
+      )}
+
+      {/* CDM Request dialog — mounted whenever there's a resolved NDC.
+          Visibility driven by `cdmOpen`. The dialog itself fetches lazily
+          (only when `open` flips true) so closing without using it costs
+          nothing. */}
+      {result?.ndc && (
+        <CdmRequestDialog
+          open={cdmOpen}
+          onOpenChange={setCdmOpen}
+          ndc={result.ndc}
         />
       )}
     </div>

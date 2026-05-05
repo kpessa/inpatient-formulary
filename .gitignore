@@ -23,6 +23,11 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/*.xlsx
+# Exception: the CDM Request form template ships with the build because
+# /api/cdm-request/[ndc]?format=xlsx reads it at runtime to produce the
+# autofilled download. Keep this file in the repo so the Vercel deploy
+# includes it (combined with outputFileTracingIncludes in next.config.mjs).
+!data/cdm_request_template.xlsx
 data/*.zip
 data/*.json
 data/_test_write

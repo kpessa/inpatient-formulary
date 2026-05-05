@@ -24,6 +24,17 @@
  *   MLTM_FLAVOR                  → mltm_flavor
  *   MLTM_ADDITIONAL_DOSEFORM     → mltm_additional_doseform
  *   MLTM_NDC_IMAGE               → mltm_ndc_image            (imprint + filename)
+ *   mltm_rxb_order_category      → mltm_rxb_order_category   (RxBuilder enums)
+ *   mltm_rxb_order_type          → mltm_rxb_order_type
+ *   mltm_rxb_dictionary          → mltm_rxb_dictionary       (~1.9K rows)
+ *   mltm_rxb_order               → mltm_rxb_order            (drug+order → MMDC hub)
+ *   mltm_rxb_ord_dose_amount     → mltm_rxb_ord_dose_amount         (most_common_ind)
+ *   mltm_rxb_ord_clinical_rte_map → mltm_rxb_ord_clinical_rte_map   (most_common_ind)
+ *   mltm_rxb_order_frequency_map → mltm_rxb_order_frequency_map     (most_common_ind)
+ *   mltm_rxb_order_prn_map       → mltm_rxb_order_prn_map
+ *   mltm_rxb_order_dispense_map  → mltm_rxb_order_dispense_map
+ *   mltm_rxb_order_duration_map  → mltm_rxb_order_duration_map      (most_common_ind)
+ *   mltm_rxb_order_instruction_map → mltm_rxb_order_instruction_map
  *
  * Idempotent: each table is wiped + reloaded inside a single transaction.
  *
@@ -346,6 +357,187 @@ const SPECS: Spec[] = [
       'side_1_marking', 'side_2_marking', 'scored_ind', 'image_filename',
     ],
     filter: (r) => r.NDC_LEFT_9 != null && String(r.NDC_LEFT_9).trim() !== '',
+  },
+  // ---------------------------------------------------------------------------
+  // RxBuilder reference tables — see lib/multum-tables.ts for the schema.
+  // Loaded after the existing mltm_* tables but before multum_ndc_combined
+  // (which is rebuilt last). Small dictionaries first so any ID-resolution
+  // queries downstream can rely on them.
+  // ---------------------------------------------------------------------------
+  {
+    table: 'mltm_rxb_order_category',
+    sheet: 'mltm_rxb_order_category',
+    cols: [
+      ['ORDER_CATEGORY_ID',          'order_category_id',          asInt],
+      ['ORDER_CATEGORY_DESCRIPTION', 'order_category_description', asText],
+    ],
+    insertCols: ['order_category_id', 'order_category_description'],
+    filter: (r) => r.ORDER_CATEGORY_ID != null,
+  },
+  {
+    table: 'mltm_rxb_order_type',
+    sheet: 'mltm_rxb_order_type',
+    cols: [
+      ['ORDER_TYPE_ID',          'order_type_id',          asInt],
+      ['ORDER_TYPE_DESCRIPTION', 'order_type_description', asText],
+    ],
+    insertCols: ['order_type_id', 'order_type_description'],
+    filter: (r) => r.ORDER_TYPE_ID != null,
+  },
+  {
+    table: 'mltm_rxb_dictionary',
+    sheet: 'mltm_rxb_dictionary',
+    cols: [
+      ['DICTIONARY_ID', 'dictionary_id', asInt],
+      ['ABBREVIATION',  'abbreviation',  asText],
+      ['DESCRIPTION',   'description',   asText],
+    ],
+    insertCols: ['dictionary_id', 'abbreviation', 'description'],
+    filter: (r) => r.DICTIONARY_ID != null,
+  },
+  {
+    // Order hub — (drug_identifier, order_id_nbr) → MMDC. Indexed on MMDC
+    // for the autofill lookup path.
+    table: 'mltm_rxb_order',
+    sheet: 'mltm_rxb_order',
+    cols: [
+      ['DRUG_IDENTIFIER',       'drug_identifier',       asText],
+      ['ORDER_ID_NBR',          'order_id_nbr',          asInt],
+      ['MAIN_MULTUM_DRUG_CODE', 'main_multum_drug_code', asInt],
+      ['ORDER_CATEGORY_ID',     'order_category_id',     asInt],
+      ['ORDER_TYPE_ID',         'order_type_id',         asInt],
+    ],
+    insertCols: [
+      'drug_identifier', 'order_id_nbr', 'main_multum_drug_code',
+      'order_category_id', 'order_type_id',
+    ],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
+  },
+  {
+    // Dose options per order. most_common_ind = 1 marks Cerner's recommended
+    // default dose — fills CDM Request "Usual Dose" (R5).
+    table: 'mltm_rxb_ord_dose_amount',
+    sheet: 'mltm_rxb_ord_dose_amount',
+    cols: [
+      ['DRUG_IDENTIFIER',             'drug_identifier',             asText],
+      ['ORDER_ID_NBR',                'order_id_nbr',                asInt],
+      ['DOSE_AMOUNT',                 'dose_amount',                 asReal],
+      ['DOSE_UNIT_DICTIONARY_ID',     'dose_unit_dictionary_id',     asInt],
+      ['DOSE_QTY_AMOUNT',             'dose_qty_amount',             asReal],
+      ['DOSE_QTY_UNIT_DICTIONARY_ID', 'dose_qty_unit_dictionary_id', asInt],
+      ['MOST_COMMON_IND',             'most_common_ind',             asInt],
+    ],
+    insertCols: [
+      'drug_identifier', 'order_id_nbr', 'dose_amount', 'dose_unit_dictionary_id',
+      'dose_qty_amount', 'dose_qty_unit_dictionary_id', 'most_common_ind',
+    ],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
+  },
+  {
+    // Route options per order. most_common_ind = 1 → primary route;
+    // alternate_admin_route_ind = 1 → secondary admin route.
+    // Fills CDM Request "Route" (S5).
+    table: 'mltm_rxb_ord_clinical_rte_map',
+    sheet: 'mltm_rxb_ord_clinical_rte_map',
+    cols: [
+      ['DRUG_IDENTIFIER',              'drug_identifier',              asText],
+      ['ORDER_ID_NBR',                 'order_id_nbr',                 asInt],
+      ['CLINICAL_ROUTE_DICTIONARY_ID', 'clinical_route_dictionary_id', asInt],
+      ['MOST_COMMON_IND',              'most_common_ind',              asInt],
+      ['ALTERNATE_ADMIN_ROUTE_IND',    'alternate_admin_route_ind',    asInt],
+    ],
+    insertCols: [
+      'drug_identifier', 'order_id_nbr', 'clinical_route_dictionary_id',
+      'most_common_ind', 'alternate_admin_route_ind',
+    ],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
+  },
+  {
+    // Frequency options per order. most_common_ind = 1 → default schedule.
+    // Fills CDM Request "Usual Frequency" (T5).
+    table: 'mltm_rxb_order_frequency_map',
+    sheet: 'mltm_rxb_order_frequency_map',
+    cols: [
+      ['DRUG_IDENTIFIER',         'drug_identifier',         asText],
+      ['ORDER_ID_NBR',            'order_id_nbr',            asInt],
+      ['FREQUENCY_DICTIONARY_ID', 'frequency_dictionary_id', asInt],
+      ['MOST_COMMON_IND',         'most_common_ind',         asInt],
+    ],
+    insertCols: [
+      'drug_identifier', 'order_id_nbr', 'frequency_dictionary_id', 'most_common_ind',
+    ],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
+  },
+  {
+    // PRN phrasing options per order. Presence of any row → PRN-eligible.
+    // Fills CDM Request "PRN Y/N" + "PRN Indication" (U5/V5).
+    table: 'mltm_rxb_order_prn_map',
+    sheet: 'mltm_rxb_order_prn_map',
+    cols: [
+      ['DRUG_IDENTIFIER',   'drug_identifier',   asText],
+      ['ORDER_ID_NBR',      'order_id_nbr',      asInt],
+      ['PRN_DICTIONARY_ID', 'prn_dictionary_id', asInt],
+    ],
+    insertCols: ['drug_identifier', 'order_id_nbr', 'prn_dictionary_id'],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
+  },
+  {
+    table: 'mltm_rxb_order_dispense_map',
+    sheet: 'mltm_rxb_order_dispense_map',
+    cols: [
+      ['DRUG_IDENTIFIER',        'drug_identifier',        asText],
+      ['ORDER_ID_NBR',           'order_id_nbr',           asInt],
+      ['DISPENSE_AMOUNT',        'dispense_amount',        asReal],
+      ['DISPENSE_DICTIONARY_ID', 'dispense_dictionary_id', asInt],
+    ],
+    insertCols: [
+      'drug_identifier', 'order_id_nbr', 'dispense_amount', 'dispense_dictionary_id',
+    ],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
+  },
+  {
+    // Duration options per order. most_common_ind = 1 → default course length.
+    table: 'mltm_rxb_order_duration_map',
+    sheet: 'mltm_rxb_order_duration_map',
+    cols: [
+      ['DRUG_IDENTIFIER',        'drug_identifier',        asText],
+      ['ORDER_ID_NBR',           'order_id_nbr',           asInt],
+      ['DURATION_AMOUNT',        'duration_amount',        asReal],
+      ['DURATION_DICTIONARY_ID', 'duration_dictionary_id', asInt],
+      ['MOST_COMMON_IND',        'most_common_ind',        asInt],
+    ],
+    insertCols: [
+      'drug_identifier', 'order_id_nbr', 'duration_amount',
+      'duration_dictionary_id', 'most_common_ind',
+    ],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
+  },
+  {
+    table: 'mltm_rxb_order_instruction_map',
+    sheet: 'mltm_rxb_order_instruction_map',
+    cols: [
+      ['DRUG_IDENTIFIER',           'drug_identifier',           asText],
+      ['ORDER_ID_NBR',              'order_id_nbr',              asInt],
+      ['INSTRUCTION_DICTIONARY_ID', 'instruction_dictionary_id', asInt],
+    ],
+    insertCols: ['drug_identifier', 'order_id_nbr', 'instruction_dictionary_id'],
+    filter: (r) =>
+      r.DRUG_IDENTIFIER != null && String(r.DRUG_IDENTIFIER).trim() !== '' &&
+      r.ORDER_ID_NBR != null,
   },
 ]
 

@@ -100,6 +100,60 @@ interface DailymedDetail {
   images: DailymedImage[]
 }
 
+interface OpenFdaActiveIngredient {
+  name: string | null
+  strength: string | null
+}
+
+interface OpenFdaDetail {
+  ndc: string
+  brandName: string | null
+  genericName: string | null
+  labelerName: string | null
+  dosageForm: string | null
+  route: string[]
+  marketingCategory: string | null
+  marketingStartDate: string | null
+  marketingEndDate: string | null
+  productNdc: string | null
+  productType: string | null
+  pharmClass: string[]
+  deaSchedule: string | null
+  activeIngredients: OpenFdaActiveIngredient[]
+  packaging: Array<{
+    package_ndc: string | null
+    description: string | null
+    marketing_start_date: string | null
+  }>
+  label: {
+    indicationsAndUsage: string | null
+    dosageAndAdministration: string | null
+    contraindications: string | null
+    warnings: string | null
+    boxedWarning: string | null
+    adverseReactions: string | null
+    splSetId: string | null
+  } | null
+}
+
+interface RxNormConcept {
+  rxcui: string
+  name: string
+  tty: string
+}
+
+interface RxNormDetail {
+  ndc: string
+  rxcui: string | null
+  name: string | null
+  tty: string | null
+  status: string | null
+  ingredients: RxNormConcept[]
+  brandNames: RxNormConcept[]
+  scd: RxNormConcept[]
+  sbd: RxNormConcept[]
+}
+
 interface Props {
   ndc: string
   children: ReactElement<{
@@ -111,6 +165,8 @@ interface Props {
 // Module-level caches — repeat opens of the same NDC popover don't refetch.
 const multumCache = new Map<string, MultumNdcDetail | null>()
 const dailymedCache = new Map<string, DailymedDetail | null>()
+const openfdaCache = new Map<string, OpenFdaDetail | null>()
+const rxnormCache = new Map<string, RxNormDetail | null>()
 
 const MIN_W = 280
 const MIN_H = 280
@@ -542,8 +598,176 @@ function DetailBody({ detail }: { detail: MultumNdcDetail }) {
           <Row label="AWP" value={fmtMoney(detail.awp)} mono />
           <Row label="Acquisition" value={fmtMoney(detail.aCost)} mono />
         </Section>
+
+        {/* OpenFDA — NDC Directory + label highlights. Lazy-fetched alongside
+            Multum so the user gets the FDA's view of marketing status,
+            ingredients, and pharm class without leaving the popover. */}
+        <OpenFdaSlot ndc={detail.ndc} />
+
+        {/* RxNorm — NLM concept service. Surfaces RxCUI + ingredient/brand
+            concepts so the user can cross-reference into RxNav or other
+            RxCUI-based systems. */}
+        <RxNormSlot ndc={detail.ndc} />
       </div>
     </>
+  )
+}
+
+/**
+ * OpenFDA detail slot inside the popover. Fetches `/api/ndc/[ndc]/openfda`,
+ * caches at module level, renders a compact section. Empty state when the
+ * NDC isn't in OpenFDA.
+ */
+function OpenFdaSlot({ ndc }: { ndc: string }) {
+  const [detail, setDetail] = useState<OpenFdaDetail | null | undefined>(
+    () => openfdaCache.get(ndc),
+  )
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (openfdaCache.has(ndc)) {
+      setDetail(openfdaCache.get(ndc))
+      return
+    }
+    setLoading(true)
+    fetch(`/api/ndc/${encodeURIComponent(ndc)}/openfda`)
+      .then(async (r) => {
+        if (r.status === 404) return null
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return (await r.json()) as OpenFdaDetail
+      })
+      .then((d) => {
+        openfdaCache.set(ndc, d)
+        setDetail(d)
+      })
+      .catch(() => {
+        // Network/timeout — leave silent. The DailyMed section above already
+        // signals NIH availability; users can re-open if they need the data.
+        setDetail(null)
+      })
+      .finally(() => setLoading(false))
+  }, [ndc])
+
+  if (loading) {
+    return (
+      <Section title="OpenFDA">
+        <div className="text-[10px] text-[#808080] italic">Loading…</div>
+      </Section>
+    )
+  }
+  if (!detail) {
+    return (
+      <Section title="OpenFDA">
+        <div className="text-[10px] text-[#808080] italic">Not in OpenFDA.</div>
+      </Section>
+    )
+  }
+  const ingredients = detail.activeIngredients
+    .filter((i) => i.name)
+    .map((i) => `${i.name}${i.strength ? ` ${i.strength}` : ""}`)
+    .join(" / ")
+  return (
+    <Section title="OpenFDA">
+      {detail.brandName && <Row label="Brand" value={detail.brandName} />}
+      {detail.genericName && <Row label="Generic" value={detail.genericName} />}
+      {detail.dosageForm && <Row label="Form" value={detail.dosageForm} />}
+      {detail.route.length > 0 && <Row label="Route" value={detail.route.join(", ")} />}
+      {detail.marketingCategory && (
+        <Row label="Marketing" value={detail.marketingCategory} />
+      )}
+      {detail.deaSchedule && <Row label="DEA" value={detail.deaSchedule} />}
+      {detail.productNdc && <Row label="Product NDC" value={detail.productNdc} mono />}
+      {ingredients && <Row label="Active" value={ingredients} />}
+      {detail.label?.boxedWarning && (
+        <div className="mt-1 px-1.5 py-1 border border-orange-700 bg-orange-50 text-orange-900 text-[10px]">
+          ⚠ Boxed warning on file — see full label on FDA.
+        </div>
+      )}
+    </Section>
+  )
+}
+
+/**
+ * RxNorm detail slot inside the popover. Fetches `/api/ndc/[ndc]/rxnorm`,
+ * caches at module level, renders RxCUI + ingredient + brand concept lines
+ * with a link to RxNav for the full concept tree.
+ */
+function RxNormSlot({ ndc }: { ndc: string }) {
+  const [detail, setDetail] = useState<RxNormDetail | null | undefined>(
+    () => rxnormCache.get(ndc),
+  )
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (rxnormCache.has(ndc)) {
+      setDetail(rxnormCache.get(ndc))
+      return
+    }
+    setLoading(true)
+    fetch(`/api/ndc/${encodeURIComponent(ndc)}/rxnorm`)
+      .then(async (r) => {
+        if (r.status === 404) return null
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return (await r.json()) as RxNormDetail
+      })
+      .then((d) => {
+        rxnormCache.set(ndc, d)
+        setDetail(d)
+      })
+      .catch(() => {
+        setDetail(null)
+      })
+      .finally(() => setLoading(false))
+  }, [ndc])
+
+  if (loading) {
+    return (
+      <Section title="RxNorm">
+        <div className="text-[10px] text-[#808080] italic">Loading…</div>
+      </Section>
+    )
+  }
+  if (!detail) {
+    return (
+      <Section title="RxNorm">
+        <div className="text-[10px] text-[#808080] italic">Not in RxNorm.</div>
+      </Section>
+    )
+  }
+  return (
+    <Section title="RxNorm">
+      {detail.rxcui && <Row label="RxCUI" value={detail.rxcui} mono />}
+      {detail.tty && <Row label="TTY" value={detail.tty} />}
+      {detail.status && (
+        <Row
+          label="Status"
+          value={detail.status}
+        />
+      )}
+      {detail.name && <Row label="Name" value={detail.name} />}
+      {detail.ingredients.length > 0 && (
+        <Row
+          label="Ingredients"
+          value={detail.ingredients.map((i) => i.name).join(" / ")}
+        />
+      )}
+      {detail.brandNames.length > 0 && (
+        <Row
+          label="Brands"
+          value={detail.brandNames.map((b) => b.name).join(", ")}
+        />
+      )}
+      {detail.rxcui && (
+        <a
+          href={`https://mor.nlm.nih.gov/RxNav/search?searchBy=RXCUI&searchTerm=${detail.rxcui}`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[10px] text-[#0033AA] hover:underline mt-0.5 inline-block"
+        >
+          open in RxNav →
+        </a>
+      )}
+    </Section>
   )
 }
 

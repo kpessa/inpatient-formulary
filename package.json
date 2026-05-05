@@ -20,6 +20,9 @@
     "db:push:multum:turso:changed": "tsx scripts/push_multum_to_turso.ts --changed",
     "db:reload:multum": "pnpm db:load:multum && pnpm db:push:multum:turso",
     "db:reload:multum:changed": "pnpm db:load:multum && pnpm db:push:multum:turso:changed",
+    "db:load:facilities": "tsx scripts/load_facilities.ts",
+    "db:push:facilities:turso": "tsx scripts/push_multum_to_turso.ts --tables=facilities,facility_cerner_codes,facility_aliases,pharmacy_contacts",
+    "db:reload:facilities": "pnpm db:load:facilities && pnpm db:push:facilities:turso",
     "db:rebuild:replica": "bash scripts/launchd/rebuild-replica.sh",
     "db:reload:multum:full": "pnpm db:reload:multum && pnpm db:rebuild:replica"
   },

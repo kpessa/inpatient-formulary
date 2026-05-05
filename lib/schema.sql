@@ -433,6 +433,30 @@ CREATE TABLE IF NOT EXISTS dailymed_cache (
   payload_json TEXT NOT NULL DEFAULT '{}'
 );
 
+-- OpenFDA per-NDC cache. https://api.fda.gov/drug/ndc.json (NDC Directory) and
+-- /drug/label.json (Structured Product Label) are publicly accessible but
+-- internet-bound and rate-limited per IP. Cache the directory entry plus the
+-- subset of SPL fields the scanner surfaces (indications, dosage, warnings).
+--
+-- Same shape and retention semantics as dailymed_cache: 30-day TTL, has_data=0
+-- is a negative cache so we don't repeat-call for NDCs OpenFDA doesn't index.
+CREATE TABLE IF NOT EXISTS openfda_cache (
+  ndc          TEXT PRIMARY KEY,
+  fetched_at   INTEGER NOT NULL,
+  has_data     INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+-- RxNorm (NIH/NLM) per-NDC cache. https://rxnav.nlm.nih.gov/REST resolves NDC
+-- → RxCUI, then ingredient/brand/clinical-drug concepts. Same retention shape
+-- as dailymed_cache / openfda_cache: 30-day TTL, has_data=0 negative cache.
+CREATE TABLE IF NOT EXISTS rxnorm_cache (
+  ndc          TEXT PRIMARY KEY,
+  fetched_at   INTEGER NOT NULL,
+  has_data     INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
 -- ============================================================================
 -- Multum pill-identification — image filename + imprint markings + lookups
 -- for shape / color / flavor / additional dose form. Loaded from MLTM_NDC_IMAGE
@@ -487,6 +511,108 @@ CREATE TABLE IF NOT EXISTS mltm_orange_book (
   orange_book_description TEXT
 );
 
+-- ============================================================================
+-- RxBuilder (RXB) reference tables — Cerner Millennium pharmacy-order-entry
+-- defaults. mltm_rxb_order is the join hub (drug_identifier + order_id_nbr →
+-- MMDC); per-order options for dose, route, frequency, etc. live in the
+-- *_map tables. Rows flagged most_common_ind = 1 are the Cerner-recommended
+-- defaults — used to autofill the CDM Request form's pharmacy-side cells
+-- (Usual Dose, Route, Usual Frequency, PRN Y/N).
+-- Dictionary IDs resolve through mltm_rxb_dictionary (~1.9K rows).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_category (
+  order_category_id          INTEGER PRIMARY KEY,
+  order_category_description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_type (
+  order_type_id          INTEGER PRIMARY KEY,
+  order_type_description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_dictionary (
+  dictionary_id  INTEGER PRIMARY KEY,
+  abbreviation   TEXT,
+  description    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order (
+  drug_identifier        TEXT NOT NULL,
+  order_id_nbr           INTEGER NOT NULL,
+  main_multum_drug_code  INTEGER,
+  order_category_id      INTEGER,
+  order_type_id          INTEGER,
+  PRIMARY KEY (drug_identifier, order_id_nbr)
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_order_mmdc ON mltm_rxb_order(main_multum_drug_code);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_ord_dose_amount (
+  drug_identifier              TEXT NOT NULL,
+  order_id_nbr                 INTEGER NOT NULL,
+  dose_amount                  REAL,
+  dose_unit_dictionary_id      INTEGER,
+  dose_qty_amount              REAL,
+  dose_qty_unit_dictionary_id  INTEGER,
+  most_common_ind              INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_dose_lookup
+  ON mltm_rxb_ord_dose_amount(drug_identifier, order_id_nbr, most_common_ind);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_ord_clinical_rte_map (
+  drug_identifier               TEXT NOT NULL,
+  order_id_nbr                  INTEGER NOT NULL,
+  clinical_route_dictionary_id  INTEGER,
+  most_common_ind               INTEGER NOT NULL DEFAULT 0,
+  alternate_admin_route_ind     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_rte_lookup
+  ON mltm_rxb_ord_clinical_rte_map(drug_identifier, order_id_nbr, most_common_ind);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_frequency_map (
+  drug_identifier         TEXT NOT NULL,
+  order_id_nbr            INTEGER NOT NULL,
+  frequency_dictionary_id INTEGER,
+  most_common_ind         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_freq_lookup
+  ON mltm_rxb_order_frequency_map(drug_identifier, order_id_nbr, most_common_ind);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_prn_map (
+  drug_identifier   TEXT NOT NULL,
+  order_id_nbr      INTEGER NOT NULL,
+  prn_dictionary_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_prn_lookup
+  ON mltm_rxb_order_prn_map(drug_identifier, order_id_nbr);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_dispense_map (
+  drug_identifier        TEXT NOT NULL,
+  order_id_nbr           INTEGER NOT NULL,
+  dispense_amount        REAL,
+  dispense_dictionary_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_dispense_lookup
+  ON mltm_rxb_order_dispense_map(drug_identifier, order_id_nbr);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_duration_map (
+  drug_identifier        TEXT NOT NULL,
+  order_id_nbr           INTEGER NOT NULL,
+  duration_amount        REAL,
+  duration_dictionary_id INTEGER,
+  most_common_ind        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_duration_lookup
+  ON mltm_rxb_order_duration_map(drug_identifier, order_id_nbr, most_common_ind);
+
+CREATE TABLE IF NOT EXISTS mltm_rxb_order_instruction_map (
+  drug_identifier           TEXT NOT NULL,
+  order_id_nbr              INTEGER NOT NULL,
+  instruction_dictionary_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_mltm_rxb_instruction_lookup
+  ON mltm_rxb_order_instruction_map(drug_identifier, order_id_nbr);
+
 -- Denormalized one-row-per-NDC table — the app's read source of truth for
 -- per-NDC reference data. Seeded by scripts/load_multum_xlsx.ts after the
 -- raw mltm_* tables are loaded. Going forward, a CCL query on the Cerner
@@ -540,6 +666,83 @@ CREATE INDEX IF NOT EXISTS idx_multum_combined_obsolete  ON multum_ndc_combined(
 -- One row in extract_runs per deploy; one row in extract_changes per
 -- (drug, change) pair so the UI can pivot by field-name later.
 -- ============================================================================
+-- ============================================================================
+-- Facility identity tables — cross-source mapping for NDC-move alerting and
+-- contact resolution. Three input sources feed these:
+--   • UHS Pharmacy Contact Information.xlsx (authoritative business scope —
+--     ~36 acute-care hospitals, formatted "MNEMONIC - Long Name")
+--   • facilities.xlsx (Cerner FACILITY code-set dump, ~838 active rows across
+--     P152E/P152C/P152W; many sub-clinics + labs we don't care about)
+--   • end_user_facility.csv (Service Desk ticket source — uses
+--     "Long Name (MNEMONIC)" naming convention)
+--
+-- Mnemonic (e.g. 'WRM' for Wellington Regional) is the cross-source stable
+-- key — appears in all three sources just in different positions. The
+-- alias table catches everything else (colloquial spellings, sub-displays).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS facilities (
+  mnemonic   TEXT PRIMARY KEY,            -- 'WRM', 'AIK', 'ABM', …
+  long_name  TEXT NOT NULL,                -- 'Wellington Regional Medical Center'
+  region     TEXT,                         -- 'East', 'Central', 'West'
+  is_acute   INTEGER NOT NULL DEFAULT 1,   -- 0 for BH / Omnicell / AMB / CentRx
+  notes      TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Per-Cerner-domain code mapping. Translates the integer loc_facility_cd that
+-- the CCL admin-scan query returns into a canonical facility row, and lets
+-- the app generate domain-aware queries. One row per (mnemonic, domain).
+CREATE TABLE IF NOT EXISTS facility_cerner_codes (
+  mnemonic    TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
+  domain      TEXT NOT NULL,                -- 'P152E', 'P152C', 'P152W'
+  code_value  INTEGER NOT NULL,
+  display     TEXT,                          -- Cerner DISPLAY ('WRM Center')
+  description TEXT,                          -- Cerner DESCRIPTION ('WRM- Wellington…')
+  active_ind  INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (mnemonic, domain)
+);
+CREATE INDEX IF NOT EXISTS idx_facility_cerner_code_value
+  ON facility_cerner_codes(domain, code_value);
+
+-- Free-form alias index. Holds every observed string form of every facility
+-- (Cerner DISPLAY, DESCRIPTION, contacts long-name, Service Desk variants,
+-- manually-added colloquial spellings) so any incoming string can resolve to
+-- a canonical mnemonic via single-row lookup. alias_lower is the lowercased
+-- form for case-insensitive matching.
+CREATE TABLE IF NOT EXISTS facility_aliases (
+  alias_lower TEXT PRIMARY KEY,
+  mnemonic    TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
+  -- 'cerner_display' / 'cerner_description' / 'contacts_long_name' /
+  -- 'service_desk' / 'service_desk_with_parens' / 'manual'
+  source      TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_facility_aliases_mnemonic
+  ON facility_aliases(mnemonic);
+
+-- Pharmacy contacts — flattened from the UHS Pharmacy Contact Information
+-- workbook (one row per role per facility). Used by NDC-move alerting to
+-- decide who to email at each affected facility. The same mnemonic can
+-- appear in multiple sheets (acute vs BH); source_sheet tracks origin.
+CREATE TABLE IF NOT EXISTS pharmacy_contacts (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  mnemonic     TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
+  -- 'pharmacy_director' / 'operations_manager' / 'clinical_manager' /
+  -- 'ip_pharmacist' / 'is_director' / 'main_pharmacy_phone'
+  role         TEXT NOT NULL,
+  name         TEXT,
+  email        TEXT,
+  phone        TEXT,
+  raw_value    TEXT,                              -- original cell text for audit
+  source_sheet TEXT NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pharmacy_contacts_mnemonic
+  ON pharmacy_contacts(mnemonic);
+CREATE INDEX IF NOT EXISTS idx_pharmacy_contacts_role
+  ON pharmacy_contacts(role);
+
 CREATE TABLE IF NOT EXISTS extract_runs (
   id            TEXT PRIMARY KEY,                 -- e.g. 'formulary-20260503'
   ran_at        TEXT NOT NULL DEFAULT (datetime('now')),
