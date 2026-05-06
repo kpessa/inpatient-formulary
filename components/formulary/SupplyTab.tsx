@@ -119,6 +119,100 @@ function copyToClipboard(text: string): void {
   })
 }
 
+interface MmdcGroup {
+  mmdc: number
+  ndcs: string[]
+  label: string  // "bacitracin topical 500 units/g ointment" — best-effort identity
+}
+
+/** Group flexed NDCs by their Multum main_multum_drug_code so we can detect
+ *  force-stacks (multiple distinct MMDCs flexed under one CDM = clinically
+ *  different products merged in Cerner build). NDCs with no Multum data
+ *  (`mmdc=null`) get bucketed under a synthetic "no MMDC" group so they're
+ *  still visible. */
+function computeMmdcGroups(
+  ndcs: readonly string[],
+  sources: ReturnType<typeof useNdcSources>,
+): MmdcGroup[] {
+  const byMmdc = new Map<number | null, { ndcs: string[]; label: string | null }>()
+  for (const ndc of ndcs) {
+    const summary = sources[ndc]
+    const mmdc = summary?.mmdc ?? null
+    const label = summary
+      ? [summary.genericName, summary.strengthDescription, summary.doseFormDescription]
+          .filter(Boolean)
+          .join(' ')
+      : null
+    if (!byMmdc.has(mmdc)) byMmdc.set(mmdc, { ndcs: [], label: null })
+    const entry = byMmdc.get(mmdc)!
+    entry.ndcs.push(ndc)
+    if (!entry.label && label) entry.label = label
+  }
+  // Drop the no-MMDC bucket only when EVERY ndc has no Multum data — in
+  // that case the data is just absent (not a mismatch). Otherwise keep
+  // it visible so users see "and these N have no Multum match" alongside
+  // the real groups.
+  const real = [...byMmdc.entries()]
+    .filter(([k]) => k != null)
+    .map(([k, v]) => ({ mmdc: k as number, ndcs: v.ndcs, label: v.label ?? `MMDC ${k}` }))
+  if (real.length === 0) return []
+  return real.sort((a, b) => b.ndcs.length - a.ndcs.length || a.mmdc - b.mmdc)
+}
+
+/** Banner that fires only when 2+ distinct MMDCs are flexed under the
+ *  current product. Shows a one-line summary ("Mixed MMDCs: 4 of one drug,
+ *  7 of another") plus collapsible per-group NDC list so pharmacy can
+ *  spot which NDCs belong to which clinical product. */
+function MmdcMismatchBanner({ groups }: { groups: MmdcGroup[] }) {
+  if (groups.length < 2) return null
+  const summaryLine = groups
+    .map(g => `${g.ndcs.length} × MMDC ${g.mmdc}`)
+    .join(' · ')
+  return (
+    <details className="border-y border-[#CC0000] bg-[#FFF0E0]">
+      <summary className="cursor-pointer px-2 py-1 text-xs font-mono">
+        <span className="font-bold text-[#CC0000]">⚠ MMDC mismatch — possible force-stack</span>
+        <span className="ml-2 text-[#404040]">
+          {groups.length} distinct Multum drug codes flexed under this CDM ({summaryLine})
+        </span>
+        <span className="ml-2 text-[10px] text-[#808080] italic">click to expand</span>
+      </summary>
+      <div className="px-2 pb-2 text-[11px] font-mono space-y-1.5">
+        <div className="text-[10px] text-[#606060]">
+          Multum considers these clinically different products. Two NDCs with
+          different MMDCs in the same CDM means pharmacy or build folks merged
+          unrelated drugs at some point — usually worth splitting into separate
+          CDMs (file a build ticket).
+        </div>
+        {groups.map(g => (
+          <div key={g.mmdc} className="border border-[#E0C0C0] bg-white p-1.5">
+            <div className="flex items-baseline gap-2">
+              <span className="font-bold" style={{ color: mmdcColor(g.mmdc) }}>
+                MMDC {g.mmdc}
+              </span>
+              <span className="text-[#404040]">{g.label}</span>
+              <span className="text-[10px] text-[#808080] ml-auto">
+                {g.ndcs.length} NDC{g.ndcs.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="text-[10px] mt-0.5 break-all text-[#404040]">
+              {g.ndcs.join(', ')}
+            </div>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+/** Stable per-MMDC color for visual grouping. Uses the integer code mod a
+ *  small palette of accessible colors so the same MMDC always gets the
+ *  same swatch within a session. */
+function mmdcColor(mmdc: number): string {
+  const palette = ['#0F8C5C', '#A66B00', '#0050A0', '#7A2A8A', '#A02C2C', '#3F6F00']
+  return palette[Math.abs(mmdc) % palette.length]
+}
+
 function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: DomainRecord[]; onCreateTask?: (fieldName: string, fieldLabel: string, values: DomainValue[]) => void }) {
   const [selectedNdc, setSelectedNdc] = useState<string | null>(null)
   const [expandedNdcs, setExpandedNdcs] = useState<Set<string>>(new Set())
@@ -191,6 +285,12 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   const visibleNdcs = gapsOnly ? allNdcs.filter(isPartialStack) : allNdcs
   const canShowGapsControls = prodRegionsLoaded.length >= 2
 
+  // MMDC mismatch detection — group flexed NDCs by their Multum main drug
+  // code. When >1 distinct MMDC is present, this CDM contains a force-stack
+  // (NDCs that are clinically different products merged under one Cerner
+  // build). Surface as a warning so pharmacy can split the product.
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources)
+
   return (
     <div className="flex flex-col h-full text-xs font-mono">
       {canShowGapsControls && (
@@ -217,6 +317,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
           </span>
         </div>
       )}
+      <MmdcMismatchBanner groups={mmdcGroups} />
       <div className="flex-1 overflow-auto border border-[#808080]">
         <Table className="text-xs font-mono border-collapse w-full min-w-max">
           <TableHeader className="sticky top-0 bg-[#D4D0C8] z-10">
@@ -462,6 +563,8 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
     return <SupplyUnionView domainRecords={domainRecords!} onCreateTask={onCreateTask} />
   }
 
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources)
+
   return (
     <div className="flex flex-col h-full text-xs font-mono">
       {ndcSetHighlighted && (
@@ -469,6 +572,7 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
           ⚠ NDC set differs across domains
         </div>
       )}
+      <MmdcMismatchBanner groups={mmdcGroups} />
       <div className="flex-1 overflow-auto border border-[#808080]">
         <Table className="text-xs font-mono border-collapse w-full min-w-max">
           <TableHeader className="sticky top-0 bg-[#D4D0C8] z-10">

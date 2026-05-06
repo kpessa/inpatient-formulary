@@ -21,6 +21,17 @@ import { getDb } from '@/lib/db'
 
 interface SourcesSummary {
   inMultum: boolean
+  /** Main Multum Drug Code — the canonical Multum stacking key. Two NDCs
+   *  with different MMDCs are treated as different products clinically,
+   *  even when they share a CDM. The Supply tab uses this to flag
+   *  force-stacks (e.g. bacitracin MMDC 3947 stacked alongside bacitracin
+   *  zinc MMDC 26528 under one CDM). */
+  mmdc: number | null
+  /** Best-effort identity for displaying alongside the MMDC mismatch
+   *  banner — "bacitracin topical 500 units/g ointment" etc. */
+  genericName: string | null
+  strengthDescription: string | null
+  doseFormDescription: string | null
   /** AB rating from FDA Orange Book ('A', 'B', '1'..'10', 'O'). */
   orangeBookRating: string | null
   orangeBookDescription: string | null
@@ -64,6 +75,10 @@ export async function POST(req: NextRequest) {
   for (const ndc of limited) {
     result[ndc] = {
       inMultum: false,
+      mmdc: null,
+      genericName: null,
+      strengthDescription: null,
+      doseFormDescription: null,
       orangeBookRating: null,
       orangeBookDescription: null,
       imprintSide1: null,
@@ -84,7 +99,8 @@ export async function POST(req: NextRequest) {
   // Single round-trip to multum_ndc_combined for everything except DailyMed.
   try {
     const { rows } = await db.execute({
-      sql: `SELECT ndc_formatted,
+      sql: `SELECT ndc_formatted, mmdc,
+                   generic_name, strength_description, dose_form_description,
                    orange_book_rating, orange_book_description,
                    imprint_side_1, imprint_side_2, is_scored,
                    pill_color, pill_shape, additional_dose_form,
@@ -98,6 +114,10 @@ export async function POST(req: NextRequest) {
       const entry = result[ndc]
       if (!entry) continue
       entry.inMultum = true
+      entry.mmdc = (r.mmdc as number | null) ?? null
+      entry.genericName = (r.generic_name as string | null) ?? null
+      entry.strengthDescription = (r.strength_description as string | null) ?? null
+      entry.doseFormDescription = (r.dose_form_description as string | null) ?? null
       entry.orangeBookRating = (r.orange_book_rating as string | null) ?? null
       entry.orangeBookDescription = (r.orange_book_description as string | null) ?? null
       entry.imprintSide1 = (r.imprint_side_1 as string | null) ?? null

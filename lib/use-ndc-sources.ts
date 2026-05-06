@@ -4,6 +4,14 @@ import { useEffect, useState } from "react"
 
 export interface NdcSourcesSummary {
   inMultum: boolean
+  /** Main Multum Drug Code — canonical clinical stacking key. Two NDCs
+   *  with different MMDCs are clinically different products even if
+   *  Cerner has them stacked under the same CDM (force-stack). The
+   *  Supply tab uses this to surface that mismatch. */
+  mmdc: number | null
+  genericName: string | null
+  strengthDescription: string | null
+  doseFormDescription: string | null
   /**
    * AB rating from the FDA Orange Book ('A', 'B', '1'..'10', 'O', or null).
    * 'O' (Not Rated) is the default for 52% of NDCs and is NOT a positive
