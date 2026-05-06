@@ -1055,12 +1055,22 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
   // stays stable when `useUnionView` flips — see Rules of Hooks).
   // Primary-first sort: pins the assigned primary to the top regardless of
   // the order it sits in supply_records. Stable for the rest, so the
-  // remaining NDCs preserve their on-disk order.
+  // remaining NDCs preserve their on-disk order. Dedupe by NDC after sorting
+  // so that "All Domains" loads — which can repeat the same NDC once per
+  // region/env — collapse to one row, with primary-domain attributes winning.
   const supplyData = useMemo(() => {
     const rows = item?.supplyRecords ?? []
-    return [...rows].sort((a, b) =>
+    const sorted = [...rows].sort((a, b) =>
       a.isPrimary === b.isPrimary ? 0 : a.isPrimary ? -1 : 1,
     )
+    const seen = new Set<string>()
+    return sorted.filter(r => {
+      const key = r.ndc ?? ''
+      if (!key) return true
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
   }, [item?.supplyRecords])
   const ndcSetHighlighted = highlightedFields?.has('ndcSet') ?? false
 
