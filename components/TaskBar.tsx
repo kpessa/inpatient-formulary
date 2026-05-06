@@ -110,6 +110,13 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isAdminM
                 <span className="w-3 text-center">↗</span>
                 <span>🏥</span> Facility Admin
               </DropdownMenuItem>
+              <DropdownMenuItem
+                className={MENU_ITEM_CLASS}
+                onSelect={() => window.open('/admin/ndc-move-alert', '_blank', 'noopener,noreferrer')}
+              >
+                <span className="w-3 text-center">↗</span>
+                <span>📨</span> NDC Move Alert
+              </DropdownMenuItem>
             </>
           )}
         </DropdownMenuContent>
