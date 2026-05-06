@@ -126,6 +126,12 @@ export interface NdcMoveAlertResponse {
    *  shared admin-scan localStorage cache so the Supply tab and other
    *  views can overlay usage data on their NDC lists. */
   barcodeTotals: Record<string, number>
+  /** Per-barcode breakdown: barcode → list of { mnemonic, domain, count }.
+   *  Lets the Supply tab render which facilities scanned each NDC, with
+   *  per-domain coloring. Facility names that didn't resolve to a known
+   *  mnemonic are skipped here (they're already visible in
+   *  unresolvedFacilities for the user to add aliases). */
+  facilityScansByBarcode: Record<string, Array<{ mnemonic: string; domain: string; count: number }>>
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -342,6 +348,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       unresolvedFacilities: [],
       unmatchedBarcodes: [],
       barcodeTotals: {},
+      facilityScansByBarcode: {},
     }
     return NextResponse.json(response)
   }
@@ -455,10 +462,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // so other views can overlay scan counts on NDCs that weren't part of
   // this particular query.
   const barcodeTotals: Record<string, number> = {}
+  // Per-barcode facility breakdown for the Supply tab's facility chips.
+  // Resolves Cerner display names → mnemonics via the alias map and groups
+  // by (mnemonic, domain). Unresolved facility names are skipped — the
+  // user already sees them in unresolvedFacilities to fix.
+  const facilityAccum = new Map<string, Map<string, { mnemonic: string; domain: string; count: number }>>()
   for (const r of scanRows) {
     const norm = r.barcode.replace(/[^0-9]/g, '')
     if (!norm) continue
     barcodeTotals[norm] = (barcodeTotals[norm] ?? 0) + r.scanCount
+    const mnemonic = aliasMap.get(r.facility.toLowerCase())
+    if (!mnemonic) continue
+    const key = `${mnemonic}|${r.domain}`
+    if (!facilityAccum.has(norm)) facilityAccum.set(norm, new Map())
+    const inner = facilityAccum.get(norm)!
+    const existing = inner.get(key)
+    if (existing) existing.count += r.scanCount
+    else inner.set(key, { mnemonic, domain: r.domain, count: r.scanCount })
+  }
+  const facilityScansByBarcode: Record<string, Array<{ mnemonic: string; domain: string; count: number }>> = {}
+  for (const [bc, inner] of facilityAccum) {
+    facilityScansByBarcode[bc] = [...inner.values()].sort((a, b) => b.count - a.count)
   }
 
   const response: NdcMoveAlertResponse = {
@@ -478,6 +502,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     unresolvedFacilities: unresolved,
     unmatchedBarcodes: [...unmatchedBarcodeMap.values()].sort((a, b) => b.scanCount - a.scanCount),
     barcodeTotals,
+    facilityScansByBarcode,
   }
   return NextResponse.json(response)
 }

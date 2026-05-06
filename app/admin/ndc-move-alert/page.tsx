@@ -72,6 +72,7 @@ export default function NdcMoveAlertPage() {
           totalScans,
           uniqueBarcodes: Object.keys(json.barcodeTotals).length,
           barcodeTotals: json.barcodeTotals,
+          facilityScansByBarcode: json.facilityScansByBarcode ?? {},
         })
       }
     } catch (e) {

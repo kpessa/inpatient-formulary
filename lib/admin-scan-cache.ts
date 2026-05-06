@@ -11,7 +11,18 @@
  * but adds load+sync complexity not worth shipping for v1.
  */
 
-const STORAGE_KEY = 'admin-scan-cache:v1'
+// Bumped from v1 → v2 when facility breakdown was added. Old caches
+// without facilityScansByBarcode will gracefully read with an empty
+// breakdown, so views still work after the upgrade — the user just won't
+// see facility chips until they re-run NDC Move Alert.
+const STORAGE_KEY = 'admin-scan-cache:v2'
+const LEGACY_STORAGE_KEY = 'admin-scan-cache:v1'
+
+export interface FacilityScan {
+  mnemonic: string
+  domain: string
+  count: number
+}
 
 export interface AdminScanCache {
   /** ISO timestamp when this cache was written. Used to show freshness. */
@@ -24,22 +35,37 @@ export interface AdminScanCache {
   /** Number of unique barcodes in the cache. */
   uniqueBarcodes: number
   /** Map: normalized-digits-only barcode → aggregate scan count across all
-   *  facilities + domains. Per-facility breakdown is not preserved here —
-   *  the NDC Move Alert UI is the place for that view. */
+   *  facilities + domains. Used by views that just need a per-NDC total. */
   barcodeTotals: Record<string, number>
+  /** Per-barcode facility breakdown. Lets the Supply tab render which
+   *  facilities scanned each NDC, color-coded by domain. Mnemonics are
+   *  resolved by the API via the facility_aliases table; raw Cerner names
+   *  that didn't resolve are excluded here (visible separately as
+   *  unresolvedFacilities). */
+  facilityScansByBarcode: Record<string, FacilityScan[]>
 }
 
 /** Returns the current cache if any, or null. SSR-safe (returns null on
  *  the server). Catches JSON parse errors / corrupted data and treats
- *  them as "no cache." */
+ *  them as "no cache." Falls back to v1 cache (no facilityScansByBarcode)
+ *  for graceful upgrade. */
 export function getAdminScanCache(): AdminScanCache | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    let raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) raw = window.localStorage.getItem(LEGACY_STORAGE_KEY)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as AdminScanCache
+    const parsed = JSON.parse(raw) as Partial<AdminScanCache>
     if (!parsed.barcodeTotals) return null
-    return parsed
+    // Hydrate missing field for forward-compat.
+    return {
+      loadedAt: parsed.loadedAt ?? new Date().toISOString(),
+      lookbackDays: parsed.lookbackDays ?? 30,
+      totalScans: parsed.totalScans ?? 0,
+      uniqueBarcodes: parsed.uniqueBarcodes ?? 0,
+      barcodeTotals: parsed.barcodeTotals,
+      facilityScansByBarcode: parsed.facilityScansByBarcode ?? {},
+    }
   } catch {
     return null
   }

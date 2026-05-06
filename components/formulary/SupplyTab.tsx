@@ -6,6 +6,7 @@ import {
   scansForNdc,
   type AdminScanCache,
 } from "@/lib/admin-scan-cache"
+import { getDomainColor } from "@/lib/formulary-diff"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import {
@@ -173,12 +174,20 @@ interface MmdcResolution {
  *  in MMDC group totals. The 12-digit UPC variant (leading zero) gets
  *  the same treatment.
  */
+interface ScanRollup {
+  totalScans: number
+  /** Source barcodes that rolled up into this row. Lets us aggregate
+   *  per-facility breakdowns by walking the same set of barcodes. */
+  sourceBarcodes: string[]
+}
+type ScanRollups = Map<string, ScanRollup>
+
 function computeScanRollups(
   allNdcs: readonly string[],
   cache: AdminScanCache | null,
   nonReferenceNdcs: ReadonlySet<string>,
-): Map<string, number> {
-  const rollups = new Map<string, number>()
+): ScanRollups {
+  const rollups: ScanRollups = new Map()
   if (!cache) return rollups
 
   const allNormalized = new Set<string>()
@@ -203,16 +212,20 @@ function computeScanRollups(
 
   for (const [barcode, count] of Object.entries(cache.barcodeTotals)) {
     if (allNormalized.has(barcode)) continue
-    // Try the direct 11-digit prefix first.
     let prefix = barcode.length >= 9 ? barcode.slice(0, 9) : ''
     let target = targetByPrefix.get(prefix)
-    // 12-digit UPC variant — strip leading zero and try again.
     if (!target && barcode.length === 12 && barcode.startsWith('0')) {
       prefix = barcode.slice(1, 10)
       target = targetByPrefix.get(prefix)
     }
     if (!target) continue
-    rollups.set(target, (rollups.get(target) ?? 0) + count)
+    let entry = rollups.get(target)
+    if (!entry) {
+      entry = { totalScans: 0, sourceBarcodes: [] }
+      rollups.set(target, entry)
+    }
+    entry.totalScans += count
+    entry.sourceBarcodes.push(barcode)
   }
   return rollups
 }
@@ -223,11 +236,53 @@ function computeScanRollups(
 function scansForRow(
   ndc: string,
   cache: AdminScanCache | null,
-  rollups: Map<string, number>,
+  rollups: ScanRollups,
 ): { direct: number; rolledUp: number; total: number } {
   const direct = scansForNdc(ndc, cache)
-  const rolledUp = rollups.get(ndc) ?? 0
+  const rolledUp = rollups.get(ndc)?.totalScans ?? 0
   return { direct, rolledUp, total: direct + rolledUp }
+}
+
+/** Map a CCL P152* domain code to the (region, env) tuple that
+ *  getDomainColor expects. Cerner runs at three prod sites: P152E (East),
+ *  P152C (Central), P152W (West). Cert/dev domains share the same region
+ *  but different env; admin scans only come from prod, so default to prod. */
+function domainToRegionEnv(domain: string): { region: string; env: string } {
+  const m = /^[CcPp](\d+)?([EeCcWw])$/.exec(domain) || /([EeCcWw])$/.exec(domain)
+  const r = (m?.[m.length - 1] ?? 'C').toUpperCase()
+  return {
+    region: r === 'E' ? 'east' : r === 'W' ? 'west' : 'central',
+    env: 'prod',
+  }
+}
+
+/** Per-facility breakdown for a supply row: aggregates the row's direct
+ *  barcode + any rolled-up sibling barcodes by mnemonic+domain. Used to
+ *  render the inline facility chips. Returned list is sorted by count desc. */
+function facilitiesForRow(
+  ndc: string,
+  cache: AdminScanCache | null,
+  rollups: ScanRollups,
+): Array<{ mnemonic: string; domain: string; count: number }> {
+  if (!cache?.facilityScansByBarcode) return []
+  const norm = ndc.replace(/-/g, '')
+  const barcodes = new Set<string>([norm])
+  // 12-digit UPC variant of the row's own NDC
+  const padded = '0' + norm
+  if (cache.facilityScansByBarcode[padded]) barcodes.add(padded)
+  // Plus rolled-up source barcodes
+  for (const bc of rollups.get(ndc)?.sourceBarcodes ?? []) barcodes.add(bc)
+
+  const accum = new Map<string, { mnemonic: string; domain: string; count: number }>()
+  for (const bc of barcodes) {
+    for (const fs of cache.facilityScansByBarcode[bc] ?? []) {
+      const key = `${fs.mnemonic}|${fs.domain}`
+      const cur = accum.get(key)
+      if (cur) cur.count += fs.count
+      else accum.set(key, { ...fs })
+    }
+  }
+  return [...accum.values()].sort((a, b) => b.count - a.count)
 }
 
 /** Resolve an NDC's MMDC, inferring from a labeler+product sibling when
@@ -269,7 +324,7 @@ function computeMmdcGroups(
   sources: ReturnType<typeof useNdcSources>,
   scanCache: AdminScanCache | null,
   nonReferenceNdcs: ReadonlySet<string>,
-  rollups: Map<string, number>,
+  rollups: ScanRollups,
 ): MmdcGroup[] {
   const byMmdc = new Map<number, { ndcs: string[]; label: string | null; totalScans: number }>()
   for (const ndc of ndcs) {
@@ -297,6 +352,51 @@ function computeMmdcGroups(
   }))
   if (real.length === 0) return []
   return real.sort((a, b) => b.ndcs.length - a.ndcs.length || a.mmdc - b.mmdc)
+}
+
+/** Compact per-facility chip strip rendered next to (or instead of) the
+ *  scan bar. Each chip is a small colored pill with the mnemonic + count;
+ *  background color encodes the prod domain (East/Central/West, matching
+ *  the existing W/C/E badge palette). Sorted by count descending so the
+ *  heaviest scanners come first. Wraps when wider than the cell. */
+function FacilityScanChips({
+  facilities, selected,
+}: {
+  facilities: Array<{ mnemonic: string; domain: string; count: number }>
+  selected: boolean
+}) {
+  if (facilities.length === 0) return null
+  const totalShown = Math.min(facilities.length, 8)
+  const overflow = facilities.length - totalShown
+  return (
+    <div className="flex flex-wrap gap-[2px] items-center">
+      {facilities.slice(0, totalShown).map(f => {
+        const { region, env } = domainToRegionEnv(f.domain)
+        const { bg, text } = getDomainColor(region, env)
+        return (
+          <span
+            key={`${f.mnemonic}|${f.domain}`}
+            className="text-[9px] font-mono leading-none px-1 py-0.5 rounded-sm whitespace-nowrap"
+            style={{
+              background: selected ? 'rgba(255,255,255,0.85)' : bg,
+              color: selected ? bg : text,
+            }}
+            title={`${f.mnemonic} (${f.domain}): ${f.count.toLocaleString()} scan${f.count !== 1 ? 's' : ''}`}
+          >
+            {f.mnemonic} {f.count.toLocaleString()}
+          </span>
+        )
+      })}
+      {overflow > 0 && (
+        <span
+          className="text-[9px] font-mono leading-none px-1 py-0.5 text-[#606060]"
+          title={facilities.slice(totalShown).map(f => `${f.mnemonic}: ${f.count}`).join('\n')}
+        >
+          +{overflow}
+        </span>
+      )}
+    </div>
+  )
 }
 
 /** Inline horizontal bar showing this NDC's scan count relative to the
@@ -740,6 +840,14 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                   Scans ({scanCache.lookbackDays}D)
                 </TableHead>
               )}
+              {scanCache && (
+                <TableHead
+                  className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] min-w-[200px]"
+                  title="Facilities that scanned this NDC, color-coded by prod domain (East / Central / West). Top 8 shown inline; hover the +N chip for the rest."
+                >
+                  Facilities
+                </TableHead>
+              )}
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
@@ -852,6 +960,14 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                       />
                     </TableCell>
                   )}
+                  {scanCache && (
+                    <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                      <FacilityScanChips
+                        facilities={facilitiesForRow(ndc, scanCache, scanRollups)}
+                        selected={isSelected}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
                     <NdcDomainCoverage ndc={ndc} domainRecords={domainRecords} />
                   </TableCell>
@@ -889,7 +1005,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                           {dr.badge}
                         </span>
                       </TableCell>
-                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={(mmdcMismatch ? 7 : 6) + (scanCache ? 1 : 0)}>
+                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={(mmdcMismatch ? 7 : 6) + (scanCache ? 2 : 0)}>
                         {rec
                           ? segments
                             ? segments.map((seg, j) =>
@@ -908,7 +1024,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
             })}
             {visibleNdcs.length === 0 && (
               <TableRow>
-                <TableCell colSpan={(mmdcMismatch ? 11 : 10) + (scanCache ? 1 : 0)} className="text-center py-4 text-[#808080]">
+                <TableCell colSpan={(mmdcMismatch ? 11 : 10) + (scanCache ? 2 : 0)} className="text-center py-4 text-[#808080]">
                   {allNdcs.length === 0
                     ? "No supply records"
                     : "All NDCs are fully stacked across loaded prod regions."}
@@ -1047,6 +1163,14 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   Scans ({scanCache.lookbackDays}D)
                 </TableHead>
               )}
+              {scanCache && (
+                <TableHead
+                  className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] min-w-[200px]"
+                  title="Facilities that scanned this NDC, color-coded by prod domain (East / Central / West). Top 8 shown inline; hover the +N chip for the rest."
+                >
+                  Facilities
+                </TableHead>
+              )}
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
@@ -1105,6 +1229,16 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                           ? scansForRow(row.ndc, scanCache, scanRollups)
                           : { direct: 0, rolledUp: 0, total: 0 }}
                         max={maxScans}
+                        selected={isSelected}
+                      />
+                    </TableCell>
+                  )}
+                  {scanCache && (
+                    <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                      <FacilityScanChips
+                        facilities={row.ndc
+                          ? facilitiesForRow(row.ndc, scanCache, scanRollups)
+                          : []}
                         selected={isSelected}
                       />
                     </TableCell>
