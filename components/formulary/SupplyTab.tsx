@@ -159,22 +159,86 @@ function computeMmdcGroups(
   return real.sort((a, b) => b.ndcs.length - a.ndcs.length || a.mmdc - b.mmdc)
 }
 
-/** One-line warning above the supply table when 2+ MMDCs are flexed.
- *  Per-row detail now lives in the conditionally-rendered MMDC column,
- *  so this banner is intentionally compact — just a short summary
- *  pointing the pharmacist at the column. */
+/** Force-stack warning above the supply table — fires when 2+ distinct
+ *  Multum drug codes are flexed under the same CDM. Each group card shows
+ *  the MMDC, its clinical identity, and the NDC list, with two actions
+ *  designed for the split-the-product workflow:
+ *    • Copy NDCs — quoted list ready to paste into a SQL/CCL IN clause
+ *      or any input field that accepts comma-separated NDCs.
+ *    • Alert facilities → opens /admin/ndc-move-alert with the group's
+ *      NDCs pre-filled, so pharmacy can identify which facilities are
+ *      using each clinical product before splitting them.
+ *  Per-row chips in the MMDC column carry the same color so the banner
+ *  and table stay visually linked. */
 function MmdcMismatchBanner({ groups }: { groups: MmdcGroup[] }) {
   if (groups.length < 2) return null
-  const summary = groups
-    .map(g => `${g.ndcs.length} × MMDC ${g.mmdc}`)
-    .join(' · ')
+  const summary = groups.map(g => `${g.ndcs.length} × MMDC ${g.mmdc}`).join(' · ')
   return (
-    <div className="px-2 py-1 border-y border-[#CC0000] bg-[#FFF0E0] text-xs font-mono flex items-baseline gap-2 flex-wrap">
-      <span className="font-bold text-[#CC0000]">⚠ Force-stack — {groups.length} MMDCs in this CDM</span>
-      <span className="text-[#404040]">{summary}</span>
-      <span className="text-[10px] text-[#606060] italic ml-auto">
-        per-row breakdown in the MMDC column →
-      </span>
+    <details open className="border-y border-[#CC0000] bg-[#FFF0E0]">
+      <summary className="cursor-pointer px-2 py-1 text-xs font-mono flex items-baseline gap-2 flex-wrap">
+        <span className="font-bold text-[#CC0000]">
+          ⚠ Force-stack — {groups.length} MMDCs in this CDM
+        </span>
+        <span className="text-[#404040]">{summary}</span>
+      </summary>
+      <div className="px-2 pb-2 space-y-1.5">
+        <div className="text-[10px] text-[#606060]">
+          Multum considers these clinically different products. To split:
+          copy each group's NDCs and use the Alert button to find which
+          facilities scan that specific group, then file a build ticket
+          to move those NDCs to a new CDM.
+        </div>
+        {groups.map(g => (
+          <MmdcGroupCard key={g.mmdc} group={g} />
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function MmdcGroupCard({ group }: { group: MmdcGroup }) {
+  const [copied, setCopied] = useState(false)
+  const quoted = `(${group.ndcs.map(n => `"${n}"`).join(', ')})`
+  const moveAlertHref = `/admin/ndc-move-alert?inputs=${encodeURIComponent(group.ndcs.join(','))}`
+  return (
+    <div className="border border-[#E0C0C0] bg-white p-1.5">
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span
+          className="text-[10px] font-mono font-bold px-1.5 py-0.5 leading-none"
+          style={{ background: mmdcColor(group.mmdc), color: 'white' }}
+        >
+          MMDC {group.mmdc}
+        </span>
+        <span className="text-[11px] text-[#202020]">{group.label}</span>
+        <span className="text-[10px] text-[#808080]">
+          {group.ndcs.length} NDC{group.ndcs.length !== 1 ? 's' : ''}
+        </span>
+        <div className="ml-auto flex gap-1">
+          <button
+            onClick={() => {
+              copyToClipboard(quoted)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            }}
+            className="text-[10px] border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DBD0] text-black px-1.5 py-0.5 leading-none"
+            title="Copy NDCs as a quoted, comma-separated list — paste into Discern/SQL or anywhere else."
+          >
+            {copied ? '✓ Copied' : 'Copy NDCs'}
+          </button>
+          <a
+            href={moveAlertHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] border border-[#808080] bg-[#316AC5] hover:bg-[#2456A5] text-white px-1.5 py-0.5 leading-none no-underline"
+            title="Open the NDC Move Alert page with this group's NDCs pre-filled — finds which facilities scan THIS specific clinical product."
+          >
+            Alert facilities →
+          </a>
+        </div>
+      </div>
+      <div className="text-[10px] mt-1 break-all text-[#404040] font-mono">
+        {group.ndcs.join(', ')}
+      </div>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import Link from "next/link"
 import { AdminWindowFrame } from "@/components/admin/AdminWindowFrame"
 import type { NdcMoveAlertResponse } from "@/app/api/admin/ndc-move-alert/route"
@@ -31,6 +31,18 @@ export default function NdcMoveAlertPage() {
     () => rawInput.split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
     [rawInput],
   )
+
+  // Pre-fill from `?inputs=ndc1,ndc2,…` URL param. Used by the Supply tab's
+  // MMDC mismatch banner ("Alert facilities →") to hand off a per-MMDC NDC
+  // group, so the user lands here with the input already populated and just
+  // has to click "Generate query".
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const fromUrl = new URLSearchParams(window.location.search).get('inputs')
+    if (fromUrl) {
+      setRawInput(fromUrl.split(/[\s,]+/).filter(Boolean).join('\n'))
+    }
+  }, [])
 
   async function analyze(includeTsv: boolean) {
     setLoading(true)
