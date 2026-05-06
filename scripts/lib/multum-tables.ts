@@ -421,12 +421,16 @@ CREATE TABLE IF NOT EXISTS pharmacy_contacts (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   mnemonic     TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
   role         TEXT NOT NULL,
-  name         TEXT,
+  name         TEXT NOT NULL DEFAULT '',
   email        TEXT,
   phone        TEXT,
+  notes        TEXT,
   raw_value    TEXT,
-  source_sheet TEXT NOT NULL,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  source       TEXT NOT NULL DEFAULT 'manual',
+  source_sheet TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (mnemonic, role, name)
 );
 CREATE INDEX IF NOT EXISTS idx_pharmacy_contacts_mnemonic
   ON pharmacy_contacts(mnemonic);

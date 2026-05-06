@@ -722,21 +722,32 @@ CREATE INDEX IF NOT EXISTS idx_facility_aliases_mnemonic
   ON facility_aliases(mnemonic);
 
 -- Pharmacy contacts — flattened from the UHS Pharmacy Contact Information
--- workbook (one row per role per facility). Used by NDC-move alerting to
--- decide who to email at each affected facility. The same mnemonic can
--- appear in multiple sheets (acute vs BH); source_sheet tracks origin.
+-- workbook (one row per role per facility). The xlsx is treated as SEED
+-- DATA only — once a facility has any contacts loaded, the loader is a
+-- no-op (INSERT OR IGNORE). After seeding, in-app CRUD (`/admin/facilities/
+-- [mnemonic]`) is the source of truth for adds, edits, and deletes.
+--
+-- The UNIQUE(mnemonic, role, name) constraint lets the loader's
+-- INSERT OR IGNORE skip rows that already exist without raising. `name` is
+-- NOT NULL DEFAULT '' (rather than nullable) because SQLite treats every
+-- NULL as distinct under UNIQUE — so phone-only roles like
+-- 'main_pharmacy_phone' would otherwise re-insert on every loader run.
 CREATE TABLE IF NOT EXISTS pharmacy_contacts (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   mnemonic     TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
   -- 'pharmacy_director' / 'operations_manager' / 'clinical_manager' /
   -- 'ip_pharmacist' / 'is_director' / 'main_pharmacy_phone'
   role         TEXT NOT NULL,
-  name         TEXT,
+  name         TEXT NOT NULL DEFAULT '',
   email        TEXT,
   phone        TEXT,
-  raw_value    TEXT,                              -- original cell text for audit
-  source_sheet TEXT NOT NULL,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  notes        TEXT,                              -- pharmacist-added free text
+  raw_value    TEXT,                              -- original cell text from seed (audit trail)
+  source       TEXT NOT NULL DEFAULT 'manual',    -- 'seed' / 'manual'
+  source_sheet TEXT,                              -- which xlsx sheet (when source='seed')
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (mnemonic, role, name)
 );
 CREATE INDEX IF NOT EXISTS idx_pharmacy_contacts_mnemonic
   ON pharmacy_contacts(mnemonic);

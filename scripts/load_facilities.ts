@@ -497,9 +497,16 @@ function load() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       mnemonic TEXT NOT NULL REFERENCES facilities(mnemonic) ON DELETE CASCADE,
       role TEXT NOT NULL,
-      name TEXT, email TEXT, phone TEXT,
-      raw_value TEXT, source_sheet TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      name TEXT NOT NULL DEFAULT '',
+      email TEXT,
+      phone TEXT,
+      notes TEXT,
+      raw_value TEXT,
+      source TEXT NOT NULL DEFAULT 'manual',
+      source_sheet TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (mnemonic, role, name)
     );
     CREATE INDEX IF NOT EXISTS idx_pharmacy_contacts_mnemonic
       ON pharmacy_contacts(mnemonic);
@@ -619,31 +626,29 @@ function load() {
   for (const a of sdAliases) addAlias(a)
 
   // ─── All writes go in one transaction ───
+  // INSERT OR IGNORE everywhere — the xlsx is seed data only. Once a row
+  // exists, the loader is a no-op for it; in-app CRUD owns the data after
+  // the first successful seed. Re-running the loader against a populated
+  // DB picks up only genuinely-new facilities/contacts/aliases from an
+  // updated xlsx without clobbering manual edits.
   const insertFacility = db.prepare(
-    'INSERT INTO facilities (mnemonic, long_name, region, is_acute) VALUES (?, ?, ?, ?)'
+    'INSERT OR IGNORE INTO facilities (mnemonic, long_name, region, is_acute) VALUES (?, ?, ?, ?)'
   )
   const insertCerner = db.prepare(
-    `INSERT INTO facility_cerner_codes
+    `INSERT OR IGNORE INTO facility_cerner_codes
        (mnemonic, domain, code_value, display, description, active_ind)
      VALUES (?, ?, ?, ?, ?, 1)`
   )
   const insertAlias = db.prepare(
-    'INSERT INTO facility_aliases (alias_lower, mnemonic, source) VALUES (?, ?, ?)'
+    'INSERT OR IGNORE INTO facility_aliases (alias_lower, mnemonic, source) VALUES (?, ?, ?)'
   )
   const insertContact = db.prepare(
-    `INSERT INTO pharmacy_contacts
-       (mnemonic, role, name, email, phone, raw_value, source_sheet)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT OR IGNORE INTO pharmacy_contacts
+       (mnemonic, role, name, email, phone, raw_value, source, source_sheet)
+     VALUES (?, ?, ?, ?, ?, ?, 'seed', ?)`
   )
 
   const writeAll = db.transaction(() => {
-    // Wipe in reverse-dependency order so FK constraints stay clean.
-    db.exec(`
-      DELETE FROM pharmacy_contacts;
-      DELETE FROM facility_aliases;
-      DELETE FROM facility_cerner_codes;
-      DELETE FROM facilities;
-    `)
     for (const f of facilities) {
       insertFacility.run(f.mnemonic, f.longName, f.region, f.isAcute ? 1 : 0)
     }
@@ -653,11 +658,14 @@ function load() {
     for (const [aliasLower, v] of finalAliases) {
       insertAlias.run(aliasLower, v.mnemonic, v.source)
     }
-    // Skip contacts whose mnemonic isn't in facilities (FK violation guard —
-    // shouldn't happen in practice but is cheap defense).
+    // Skip contacts whose mnemonic isn't in facilities (FK violation guard).
+    // Empty-string the name to satisfy NOT NULL when the seed has no name
+    // (e.g. main_pharmacy_phone rows are phone-only).
     for (const c of allContacts) {
       if (!knownMnemonics.has(c.mnemonic)) continue
-      insertContact.run(c.mnemonic, c.role, c.name, c.email, c.phone, c.rawValue, c.sourceSheet)
+      insertContact.run(
+        c.mnemonic, c.role, c.name ?? '', c.email, c.phone, c.rawValue, c.sourceSheet,
+      )
     }
   })
 
