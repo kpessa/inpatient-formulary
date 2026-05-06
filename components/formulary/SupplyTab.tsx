@@ -161,6 +161,75 @@ interface MmdcResolution {
   inheritedFrom?: string
 }
 
+/** Compute "scan rollups" — admin-scan barcodes that aren't themselves a
+ *  supply row but share labeler+product (first 9 digits) with one. These
+ *  are typically inner packages / unit-dose / repackaged forms of a
+ *  reference NDC; pharmacy scans them at administration even though
+ *  they're not formally listed in supply_records.
+ *
+ *  Each unattributed barcode rolls up to ONE designated target per
+ *  labeler+product cluster (preferring reference rows over non-reference;
+ *  alphabetically lowest if multiple eligible) so we never double-count
+ *  in MMDC group totals. The 12-digit UPC variant (leading zero) gets
+ *  the same treatment.
+ */
+function computeScanRollups(
+  allNdcs: readonly string[],
+  cache: AdminScanCache | null,
+  nonReferenceNdcs: ReadonlySet<string>,
+): Map<string, number> {
+  const rollups = new Map<string, number>()
+  if (!cache) return rollups
+
+  const allNormalized = new Set<string>()
+  for (const n of allNdcs) allNormalized.add(n.replace(/-/g, ''))
+
+  // Pick the rollup target per labeler+product cluster.
+  const targetByPrefix = new Map<string, string>()
+  for (const ndc of allNdcs) {
+    const norm = ndc.replace(/-/g, '')
+    if (norm.length < 9) continue
+    const prefix = norm.slice(0, 9)
+    const current = targetByPrefix.get(prefix)
+    const isRef = !nonReferenceNdcs.has(ndc)
+    if (!current) {
+      targetByPrefix.set(prefix, ndc)
+    } else {
+      const currentIsRef = !nonReferenceNdcs.has(current)
+      if (isRef && !currentIsRef) targetByPrefix.set(prefix, ndc)
+      else if (isRef === currentIsRef && ndc < current) targetByPrefix.set(prefix, ndc)
+    }
+  }
+
+  for (const [barcode, count] of Object.entries(cache.barcodeTotals)) {
+    if (allNormalized.has(barcode)) continue
+    // Try the direct 11-digit prefix first.
+    let prefix = barcode.length >= 9 ? barcode.slice(0, 9) : ''
+    let target = targetByPrefix.get(prefix)
+    // 12-digit UPC variant — strip leading zero and try again.
+    if (!target && barcode.length === 12 && barcode.startsWith('0')) {
+      prefix = barcode.slice(1, 10)
+      target = targetByPrefix.get(prefix)
+    }
+    if (!target) continue
+    rollups.set(target, (rollups.get(target) ?? 0) + count)
+  }
+  return rollups
+}
+
+/** Total scans for a supply row = direct scans of the row's NDC barcode
+ *  PLUS any rolled-up scans (from labeler+product orphans the row owns
+ *  per computeScanRollups). Returns the split for display. */
+function scansForRow(
+  ndc: string,
+  cache: AdminScanCache | null,
+  rollups: Map<string, number>,
+): { direct: number; rolledUp: number; total: number } {
+  const direct = scansForNdc(ndc, cache)
+  const rolledUp = rollups.get(ndc) ?? 0
+  return { direct, rolledUp, total: direct + rolledUp }
+}
+
 /** Resolve an NDC's MMDC, inferring from a labeler+product sibling when
  *  the NDC itself isn't in Multum. Common for non-reference rows that are
  *  inner packages or repackaged versions of a reference NDC sharing the
@@ -200,6 +269,7 @@ function computeMmdcGroups(
   sources: ReturnType<typeof useNdcSources>,
   scanCache: AdminScanCache | null,
   nonReferenceNdcs: ReadonlySet<string>,
+  rollups: Map<string, number>,
 ): MmdcGroup[] {
   const byMmdc = new Map<number, { ndcs: string[]; label: string | null; totalScans: number }>()
   for (const ndc of ndcs) {
@@ -214,7 +284,9 @@ function computeMmdcGroups(
     if (!byMmdc.has(mmdc)) byMmdc.set(mmdc, { ndcs: [], label: null, totalScans: 0 })
     const entry = byMmdc.get(mmdc)!
     entry.ndcs.push(ndc)
-    entry.totalScans += scansForNdc(ndc, scanCache)
+    // Use scansForRow so labeler+product rollups (e.g. 45802-0060-00 onto
+    // the 45802-0060-70 row) are reflected in MMDC group totals as well.
+    entry.totalScans += scansForRow(ndc, scanCache, rollups).total
     if (!entry.label && label) entry.label = label
   }
   const real = [...byMmdc.entries()].map(([k, v]) => ({
@@ -228,43 +300,71 @@ function computeMmdcGroups(
 }
 
 /** Inline horizontal bar showing this NDC's scan count relative to the
- *  product's max-scanned NDC. Helps eye-pick the heavily-used products
- *  vs the long tail. Displays the raw number to the right of the bar. */
+ *  product's max-scanned NDC. Splits the bar into direct (this exact NDC)
+ *  vs rolled-up (labeler+product orphan barcodes that share the first 9
+ *  digits — usually inner packages of this outer NDC). Tooltip exposes
+ *  the breakdown so the user can see what's attributed where. */
 function ScanBar({
-  count, max, selected,
-}: { count: number; max: number; selected: boolean }) {
-  if (count === 0 && max === 0) {
+  scans, max, selected,
+}: {
+  scans: { direct: number; rolledUp: number; total: number }
+  max: number
+  selected: boolean
+}) {
+  if (scans.total === 0 && max === 0) {
     return <span className="text-[10px] text-[#A0A0A0]">—</span>
   }
-  const pct = max === 0 ? 0 : Math.round((count / max) * 100)
-  // Heuristic threshold for "this is the heavily-used one(s)": ≥80% of max.
-  const isTop = max > 0 && count >= max * 0.8 && count > 0
+  const totalPct = max === 0 ? 0 : Math.round((scans.total / max) * 100)
+  const directPct = max === 0 ? 0 : Math.round((scans.direct / max) * 100)
+  const isTop = max > 0 && scans.total >= max * 0.8 && scans.total > 0
+  const tooltip = scans.rolledUp > 0
+    ? `${scans.total.toLocaleString()} scans = ${scans.direct.toLocaleString()} direct + ${scans.rolledUp.toLocaleString()} rolled up from inner / labeler+product siblings`
+    : `${scans.total.toLocaleString()} scans (direct)`
   return (
-    <div className="flex items-center gap-1 leading-none">
+    <div className="flex items-center gap-1 leading-none" title={tooltip}>
       <div
-        className="h-2 flex-1 min-w-[24px] max-w-[80px]"
+        className="h-2 flex-1 min-w-[24px] max-w-[80px] relative"
         style={{ background: selected ? 'rgba(255,255,255,0.25)' : '#E8E8E8' }}
-        title={`${count.toLocaleString()} scans`}
       >
+        {/* Direct portion — solid */}
         <div
-          className="h-full"
+          className="h-full absolute left-0 top-0"
           style={{
-            width: `${pct}%`,
-            background: count === 0
+            width: `${directPct}%`,
+            background: scans.direct === 0
               ? 'transparent'
               : selected
                 ? 'white'
                 : isTop ? '#0F8C5C' : '#7A9CC0',
           }}
         />
+        {/* Rolled-up portion — striped/lighter, drawn after the direct slice */}
+        {scans.rolledUp > 0 && (
+          <div
+            className="h-full absolute top-0"
+            style={{
+              left: `${directPct}%`,
+              width: `${totalPct - directPct}%`,
+              background: selected
+                ? 'rgba(255,255,255,0.6)'
+                : isTop ? '#7AC59E' : '#B0C5D8',
+              backgroundImage:
+                'repeating-linear-gradient(45deg, transparent 0, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 3px)',
+            }}
+          />
+        )}
       </div>
       <span
         className={`text-[10px] font-mono tabular-nums ${
-          count === 0 ? 'text-[#A0A0A0]' : isTop ? 'font-bold' : ''
+          scans.total === 0 ? 'text-[#A0A0A0]' : isTop ? 'font-bold' : ''
         }`}
-        title={`${count.toLocaleString()} scans`}
       >
-        {count.toLocaleString()}
+        {scans.total.toLocaleString()}
+        {scans.rolledUp > 0 && (
+          <span className="ml-0.5 text-[#606060]" title={tooltip}>
+            ⊕
+          </span>
+        )}
       </span>
     </div>
   )
@@ -518,20 +618,29 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   // (NDCs that are clinically different products merged under one Cerner
   // build). Surface as a warning AND a per-row MMDC column so pharmacy
   // can immediately see which clinical product each NDC belongs to.
-  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache, nonReferenceNdcs)
+  // Scan rollups: cache barcodes that aren't themselves a supply row but
+  // share labeler+product with one (e.g. 45802006000 inner-pkg → rolls
+  // up to 45802-0060-70 row). Computed once per render.
+  const scanRollups = useMemo(
+    () => computeScanRollups(allNdcs, scanCache, nonReferenceNdcs),
+    [allNdcs, scanCache, nonReferenceNdcs],
+  )
+
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache, nonReferenceNdcs, scanRollups)
   const mmdcMismatch = mmdcGroups.length >= 2
 
   // Highest scan count across all flexed NDCs — used to scale the per-row
-  // bar so the most-used product reads as a full bar.
+  // bar so the most-used product reads as a full bar. Uses TOTAL scans
+  // (direct + rolled up) so rows with heavy inner-pkg usage scale right.
   const maxScans = useMemo(() => {
     if (!scanCache) return 0
     let max = 0
     for (const ndc of allNdcs) {
-      const n = scansForNdc(ndc, scanCache)
+      const n = scansForRow(ndc, scanCache, scanRollups).total
       if (n > max) max = n
     }
     return max
-  }, [allNdcs, scanCache])
+  }, [allNdcs, scanCache, scanRollups])
 
   // When a force-stack is present, group the rows by MMDC so siblings
   // cluster together (matches how pharmacy thinks about the products
@@ -737,7 +846,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                   {scanCache && (
                     <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
                       <ScanBar
-                        count={scansForNdc(ndc, scanCache)}
+                        scans={scansForRow(ndc, scanCache, scanRollups)}
                         max={maxScans}
                         selected={isSelected}
                       />
@@ -855,10 +964,11 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
   }
 
   const nonReferenceNdcs = new Set(supplyData.filter(r => r.isNonReference).map(r => r.ndc))
-  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache, nonReferenceNdcs)
+  const scanRollups = computeScanRollups(allNdcs, scanCache, nonReferenceNdcs)
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache, nonReferenceNdcs, scanRollups)
   const mmdcMismatch = mmdcGroups.length >= 2
   const maxScans = scanCache
-    ? Math.max(0, ...allNdcs.map(n => scansForNdc(n, scanCache)))
+    ? Math.max(0, ...allNdcs.map(n => scansForRow(n, scanCache, scanRollups).total))
     : 0
 
   // When force-stack is active, group rows by MMDC (using inferred MMDCs
@@ -991,7 +1101,9 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   {scanCache && (
                     <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
                       <ScanBar
-                        count={row.ndc ? scansForNdc(row.ndc, scanCache) : 0}
+                        scans={row.ndc
+                          ? scansForRow(row.ndc, scanCache, scanRollups)
+                          : { direct: 0, rolledUp: 0, total: 0 }}
                         max={maxScans}
                         selected={isSelected}
                       />
