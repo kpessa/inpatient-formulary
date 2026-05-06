@@ -121,8 +121,17 @@ export default function NdcMoveAlertPage() {
               </tbody>
             </table>
             {data.ndcFilterActive && (
-              <div className="mt-2 text-[11px] text-[#0F8C5C]">
-                ✓ NDC filter active — only scan rows whose barcode matches an input NDC will be counted.
+              <div className="mt-2 space-y-1">
+                <div className="text-[11px] text-[#0F8C5C]">
+                  ✓ NDC filter active — barcode must match the input NDC or any
+                  sibling NDC under the same product (supply_records flex group +
+                  Multum MMDC).
+                </div>
+                {data.resolvedInputs
+                  .filter(r => r.type === 'ndc' && (r.siblingNdcs?.length ?? 0) > 0)
+                  .map(r => (
+                    <SiblingsBlock key={r.raw} resolved={r} />
+                  ))}
               </div>
             )}
           </Section>
@@ -195,6 +204,62 @@ export default function NdcMoveAlertPage() {
   )
 }
 
+/** Collapsible list of sibling NDCs that count as the same product when
+ *  filtering scan rows. Sibling source legend:
+ *    site = flexed under the same supply_records group_id
+ *    multum = same Multum MMDC (clinically equivalent)
+ *    both = both views agree */
+function SiblingsBlock({
+  resolved,
+}: { resolved: NdcMoveAlertResponse['resolvedInputs'][number] }) {
+  const [expanded, setExpanded] = useState(false)
+  const sibs = resolved.siblingNdcs ?? []
+  const siteCount = sibs.filter(s => s.source !== 'multum').length
+  const multumOnly = sibs.filter(s => s.source === 'multum').length
+  return (
+    <details
+      className="text-[10px]"
+      open={expanded}
+      onToggle={e => setExpanded((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer text-[#404040] py-0.5">
+        {sibs.length} sibling NDC{sibs.length !== 1 ? 's' : ''} for {resolved.raw}{' '}
+        ({siteCount} site-flexed, {multumOnly} Multum-only)
+      </summary>
+      <div className="mt-1 px-2 py-1 border border-[#C0C0C0] bg-[#FAFAF8]">
+        <div className="grid grid-cols-3 gap-x-4 gap-y-0.5 font-mono">
+          {sibs.map(s => (
+            <div key={s.ndc} className="flex items-center gap-1">
+              <span>{s.ndc}</span>
+              <span
+                className="px-1 text-[9px]"
+                style={{
+                  background: s.source === 'both' ? '#0F8C5C'
+                    : s.source === 'supply' ? '#316AC5'
+                    : '#A66B00',
+                  color: 'white',
+                }}
+                title={
+                  s.source === 'both' ? 'Flexed at site AND in Multum MMDC'
+                    : s.source === 'supply' ? 'Flexed under same supply_records group'
+                    : 'Same Multum MMDC; not formally flexed at site'
+                }
+              >
+                {s.source === 'both' ? 'site+M' : s.source === 'supply' ? 'site' : 'multum'}
+              </span>
+              {s.isNonReference && (
+                <span className="text-[9px] text-[#A66B00]" title="Non-reference (often inner / repackaged)">
+                  ⓘ
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </details>
+  )
+}
+
 function Intro() {
   return (
     <div className="border border-[#C0C0C0] bg-[#FFFAE5] px-2 py-1.5 text-[11px]">
@@ -248,7 +313,7 @@ function CdmContextPanel({ cdmContext }: { cdmContext: NdcMoveAlertResponse['cdm
               <td className="px-2 py-0.5 font-mono">{c.cdmCode}</td>
               <td className="px-2 py-0.5">{c.description ?? <span className="text-[#A0A0A0]">(not in extract)</span>}</td>
               <td className="px-2 py-0.5 text-[#606060]">
-                {c.flexedFacilities.length} facility{c.flexedFacilities.length !== 1 ? 'ies' : ''}
+                {c.flexedFacilities.length} {c.flexedFacilities.length === 1 ? 'facility' : 'facilities'}
               </td>
             </tr>
           ))}

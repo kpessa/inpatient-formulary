@@ -81,6 +81,20 @@ interface ResolvedInput {
   /** When type='ndc', a normalized 11-digit form ("45802006070") used for
    *  barcode matching. */
   normalizedNdc?: string
+  /** Sibling NDCs treated as the same product for barcode matching:
+   *  - source 'supply' = flexed under the same supply_records group_id
+   *    (the SITE's view: "we carry these NDCs under this CDM")
+   *  - source 'multum' = same Main Multum Drug Code (the CLINICAL view:
+   *    "Multum considers these the same drug"). Catches manufacturer
+   *    substitutions and inner / repackaged forms that aren't formally
+   *    flexed but are clinically equivalent.
+   *  The match set is the union, so scans of any clinically-equivalent
+   *  NDC count toward the move-alert tier. */
+  siblingNdcs?: Array<{
+    ndc: string
+    isNonReference: boolean
+    source: 'supply' | 'multum' | 'both'
+  }>
   /** Best-effort description for UI display. */
   description: string | null
 }
@@ -125,24 +139,109 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const resolvedInputs: ResolvedInput[] = []
   for (const raw of body.inputs.map(s => s.trim()).filter(Boolean)) {
     if (/^\d{5}-\d{3,4}-\d{1,2}$/.test(raw)) {
-      // NDC. Resolve to CDM(s) via supply_records.
+      // NDC. Resolve to CDM(s) AND sibling NDCs flexed under the same
+      // supply_records group_id. The (group_id, domain) tuple is the
+      // unit pharmacy actually moves — every NDC under it is the same
+      // product clinically, even if a different manufacturer / package
+      // size / repackaged form. Matching scans against just the literal
+      // input NDC misses inner / repackaged variants nurses actually
+      // scan at administration time.
       const { rows } = await db.execute({
-        sql: `SELECT DISTINCT fg.charge_number, fg.description
-              FROM supply_records sr
-              JOIN formulary_groups fg
-                ON fg.group_id = sr.group_id AND fg.domain = sr.domain
-              WHERE sr.ndc = ?
-                AND fg.environment = 'prod'
-                AND fg.charge_number != ''`,
+        sql: `
+          SELECT DISTINCT
+            fg.charge_number AS cdm,
+            fg.description,
+            sr.ndc           AS sibling_ndc,
+            sr.is_non_reference
+          FROM supply_records sr
+          JOIN formulary_groups fg
+            ON fg.group_id = sr.group_id AND fg.domain = sr.domain
+          WHERE (sr.group_id, sr.domain) IN (
+            SELECT sr2.group_id, sr2.domain
+            FROM supply_records sr2
+            JOIN formulary_groups fg2
+              ON fg2.group_id = sr2.group_id AND fg2.domain = sr2.domain
+            WHERE sr2.ndc = ?
+              AND fg2.environment = 'prod'
+              AND fg2.charge_number != ''
+          )
+          AND fg.environment = 'prod'
+          AND fg.charge_number != ''
+          AND sr.ndc != ''
+        `,
         args: [raw],
       })
-      const cdms = [...new Set(rows.map(r => r.charge_number as string))]
+      const cdms = [...new Set(rows.map(r => r.cdm as string).filter(Boolean))]
+      // Build a per-NDC info map: { isNonReference, sources }
+      const siblingMap = new Map<string, { isNonReference: boolean; sources: Set<'supply' | 'multum'> }>()
+      let description: string | null = null
+      for (const r of rows) {
+        const ndc = r.sibling_ndc as string
+        const existing = siblingMap.get(ndc)
+        if (existing) {
+          existing.sources.add('supply')
+        } else {
+          siblingMap.set(ndc, {
+            isNonReference: Number(r.is_non_reference) === 1,
+            sources: new Set(['supply']),
+          })
+        }
+        if (!description && r.description) description = r.description as string
+      }
+
+      // ALSO pull Multum MMDC siblings — clinically equivalent NDCs even
+      // when not formally flexed under the same supply_records group.
+      // Catches manufacturer substitutions / repackaged forms / inner-pkg
+      // NDCs nurses might scan that the site never formally adopted.
+      const { rows: mltmRows } = await db.execute({
+        sql: `
+          SELECT DISTINCT ndc_formatted FROM mltm_ndc
+          WHERE main_multum_drug_code = (
+            SELECT main_multum_drug_code FROM mltm_ndc WHERE ndc_formatted = ?
+          )
+          AND main_multum_drug_code IS NOT NULL
+          AND obsolete_date IS NULL
+        `,
+        args: [raw],
+      })
+      for (const r of mltmRows) {
+        const ndc = r.ndc_formatted as string
+        const existing = siblingMap.get(ndc)
+        if (existing) {
+          existing.sources.add('multum')
+        } else {
+          // Multum doesn't carry a non-reference flag; default to false.
+          siblingMap.set(ndc, {
+            isNonReference: false,
+            sources: new Set(['multum']),
+          })
+        }
+      }
+
+      const siblingNdcs = [...siblingMap.entries()]
+        .map(([ndc, info]) => ({
+          ndc,
+          isNonReference: info.isNonReference,
+          source: (info.sources.size === 2
+            ? 'both'
+            : info.sources.has('supply')
+              ? 'supply'
+              : 'multum') as 'supply' | 'multum' | 'both',
+        }))
+        .sort((a, b) => {
+          // Site-flexed siblings first (most relevant), then Multum-only.
+          const aIsSite = a.source !== 'multum' ? 0 : 1
+          const bIsSite = b.source !== 'multum' ? 0 : 1
+          if (aIsSite !== bIsSite) return aIsSite - bIsSite
+          return Number(a.isNonReference) - Number(b.isNonReference) || a.ndc.localeCompare(b.ndc)
+        })
       resolvedInputs.push({
         raw,
         type: 'ndc',
         cdmCodes: cdms,
         normalizedNdc: raw.replace(/-/g, ''),
-        description: (rows[0]?.description as string | null) ?? null,
+        siblingNdcs,
+        description,
       })
     } else if (/^\d{4,12}$/.test(raw)) {
       // CDM (numeric only). Look up its description for the UI.
@@ -249,13 +348,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ─── Filter scans by barcode-matches-input-NDC (when applicable) ──────
   // When at least one input was an NDC, only count scans whose barcode
-  // normalizes to one of the input NDCs. Pure-CDM input (no NDCs) skips
-  // this filter and counts every scan.
-  const ndcMatchSet = new Set(
-    resolvedInputs
-      .filter(r => r.type === 'ndc' && r.normalizedNdc)
-      .map(r => r.normalizedNdc!),
-  )
+  // matches the input *or any sibling NDC flexed under the same product*.
+  // Sibling expansion is critical — pharmacy might move outer NDC
+  // 45802-0060-70, but nurses scan the inner 45802-0060-00 packets at
+  // administration; both share the same supply_records group and need to
+  // count as the same product. Pure-CDM input (no NDCs) skips this
+  // filter and counts every scan returned by the CCL.
+  const ndcMatchSet = new Set<string>()
+  for (const r of resolvedInputs) {
+    if (r.type !== 'ndc') continue
+    if (r.normalizedNdc) ndcMatchSet.add(r.normalizedNdc)
+    for (const sib of r.siblingNdcs ?? []) {
+      ndcMatchSet.add(sib.ndc.replace(/-/g, ''))
+    }
+  }
   const matchedRows = ndcFilterActive
     ? scanRows.filter(r => barcodeMatchesAnyNdc(r.barcode, ndcMatchSet))
     : scanRows
