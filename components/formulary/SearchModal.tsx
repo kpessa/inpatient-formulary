@@ -2640,6 +2640,8 @@ export function SearchModal({ onClose, onMinimize, onFocus, focused = true, hidd
                             className={`border-b border-[#E0E0E0] cursor-pointer ${
                               isSelected
                                 ? "bg-[#316AC5] text-white"
+                                : r.status !== 'Active'
+                                ? "bg-[#E8E8E8] text-[#9C9C9C] line-through hover:bg-[#DCDCDC]"
                                 : idx % 2 === 0
                                 ? "bg-white hover:bg-[#F0F8FF]"
                                 : "bg-[#F8F8F8] hover:bg-[#F0F8FF]"

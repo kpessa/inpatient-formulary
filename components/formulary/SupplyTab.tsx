@@ -277,6 +277,13 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
               const baseEntry = loadedDomains.find(dr => domainData.has(dr.domain))!
               const baseRec = domainData.get(baseEntry.domain)!
               const baseDesc = baseRec.manufacturerLabelDescription || baseRec.manufacturer
+              // "All-domains inactive" — every loaded domain that has this
+              // NDC reports isActive=false. Mixed (some active, some not)
+              // is already covered by the isDiff yellow highlight; we don't
+              // want to bury that signal under the strikethrough.
+              const isAllInactive =
+                !isDiff &&
+                [...domainData.values()].every(r => !r.isActive)
 
               return [
                 <TableRow
@@ -286,6 +293,8 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                       ? 'bg-[#316AC5] text-white'
                       : isDiff
                       ? 'bg-[#FFF3CD] hover:bg-[#FFE88A]'
+                      : isAllInactive
+                      ? 'bg-[#E8E8E8] text-[#9C9C9C] line-through hover:bg-[#DCDCDC]'
                       : idx % 2 === 0
                       ? 'bg-white hover:bg-[#C7D5E8]'
                       : 'bg-[#F0F0F0] hover:bg-[#C7D5E8]'
@@ -520,12 +529,15 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
             {supplyData.map((row, idx) => {
               const isSelected = selectedNdc === row.ndc
               const summary = row.ndc ? sources[row.ndc] : undefined
+              const isInactive = !row.isActive
               return (
                 <TableRow
                   key={`${row.ndc}-${idx}`}
                   className={`border-b border-[#D4D0C8] cursor-pointer h-6 ${
                     isSelected
                       ? "bg-[#316AC5] text-white"
+                      : isInactive
+                      ? "bg-[#E8E8E8] text-[#9C9C9C] line-through hover:bg-[#DCDCDC]"
                       : idx % 2 === 0
                       ? "bg-white hover:bg-[#C7D5E8]"
                       : "bg-[#F0F0F0] hover:bg-[#C7D5E8]"
