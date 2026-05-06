@@ -151,20 +151,61 @@ interface MmdcGroup {
   totalScans: number
 }
 
+interface MmdcResolution {
+  mmdc: number | null
+  /** True when the MMDC was inherited from a labeler+product sibling (the
+   *  NDC itself isn't in Multum). Lets the chip render with a visual hint
+   *  so pharmacy can tell direct-Multum-mapped from inferred. */
+  inferred: boolean
+  /** When inferred, the reference NDC we inherited from — useful for tooltips. */
+  inheritedFrom?: string
+}
+
+/** Resolve an NDC's MMDC, inferring from a labeler+product sibling when
+ *  the NDC itself isn't in Multum. Common for non-reference rows that are
+ *  inner packages or repackaged versions of a reference NDC sharing the
+ *  same first-9 digits — pharmacy scans those at administration so we
+ *  want their counts to roll into the right MMDC group. */
+function resolveMmdc(
+  ndc: string,
+  sources: ReturnType<typeof useNdcSources>,
+  allNdcs: readonly string[],
+  nonReferenceNdcs: ReadonlySet<string>,
+): MmdcResolution {
+  const direct = sources[ndc]?.mmdc ?? null
+  if (direct != null) return { mmdc: direct, inferred: false }
+  // Only infer for non-reference NDCs — reference rows without an MMDC
+  // are usually genuinely unmapped and shouldn't borrow a sibling's tag.
+  if (!nonReferenceNdcs.has(ndc)) return { mmdc: null, inferred: false }
+  const prefix = ndc.replace(/-/g, '').slice(0, 9)
+  for (const other of allNdcs) {
+    if (other === ndc) continue
+    if (nonReferenceNdcs.has(other)) continue
+    if (other.replace(/-/g, '').slice(0, 9) !== prefix) continue
+    const otherMmdc = sources[other]?.mmdc
+    if (otherMmdc != null) {
+      return { mmdc: otherMmdc, inferred: true, inheritedFrom: other }
+    }
+  }
+  return { mmdc: null, inferred: false }
+}
+
 /** Group flexed NDCs by their Multum main_multum_drug_code so we can detect
  *  force-stacks (multiple distinct MMDCs flexed under one CDM = clinically
- *  different products merged in Cerner build). NDCs with no Multum data
- *  (`mmdc=null`) get bucketed under a synthetic "no MMDC" group so they're
- *  still visible. Sums admin-scan counts per group when scan cache is loaded. */
+ *  different products merged in Cerner build). Non-reference NDCs without
+ *  their own Multum mapping get attributed via labeler+product inference
+ *  so their scans show up in the right group. */
 function computeMmdcGroups(
   ndcs: readonly string[],
   sources: ReturnType<typeof useNdcSources>,
   scanCache: AdminScanCache | null,
+  nonReferenceNdcs: ReadonlySet<string>,
 ): MmdcGroup[] {
-  const byMmdc = new Map<number | null, { ndcs: string[]; label: string | null; totalScans: number }>()
+  const byMmdc = new Map<number, { ndcs: string[]; label: string | null; totalScans: number }>()
   for (const ndc of ndcs) {
+    const { mmdc } = resolveMmdc(ndc, sources, ndcs, nonReferenceNdcs)
+    if (mmdc == null) continue
     const summary = sources[ndc]
-    const mmdc = summary?.mmdc ?? null
     const label = summary
       ? [summary.genericName, summary.strengthDescription, summary.doseFormDescription]
           .filter(Boolean)
@@ -176,14 +217,12 @@ function computeMmdcGroups(
     entry.totalScans += scansForNdc(ndc, scanCache)
     if (!entry.label && label) entry.label = label
   }
-  const real = [...byMmdc.entries()]
-    .filter(([k]) => k != null)
-    .map(([k, v]) => ({
-      mmdc: k as number,
-      ndcs: v.ndcs,
-      label: v.label ?? `MMDC ${k}`,
-      totalScans: v.totalScans,
-    }))
+  const real = [...byMmdc.entries()].map(([k, v]) => ({
+    mmdc: k,
+    ndcs: v.ndcs,
+    label: v.label ?? `MMDC ${k}`,
+    totalScans: v.totalScans,
+  }))
   if (real.length === 0) return []
   return real.sort((a, b) => b.ndcs.length - a.ndcs.length || a.mmdc - b.mmdc)
 }
@@ -326,17 +365,21 @@ function MmdcGroupCard({ group }: { group: MmdcGroup }) {
 
 /** Per-row chip showing the NDC's Multum main drug code, color-coded by
  *  the same stable per-MMDC palette as everywhere else. Tooltip carries
- *  the full clinical identity ("bacitracin topical zinc 500 units/g
- *  ointment"). Falls back to a grey "—" for NDCs without a Multum match. */
+ *  the full clinical identity. Inferred MMDCs (non-reference NDCs that
+ *  inherited from a labeler+product sibling) render with a dashed
+ *  border + lighter background so the user can tell direct vs inferred. */
 function MmdcChip({
-  summary, selected,
-}: { summary: NdcSourcesSummary | undefined; selected: boolean }) {
-  const mmdc = summary?.mmdc ?? null
-  if (mmdc == null) {
+  resolution, summary, selected,
+}: {
+  resolution: MmdcResolution
+  summary: NdcSourcesSummary | undefined
+  selected: boolean
+}) {
+  if (resolution.mmdc == null) {
     return (
       <span
         className="text-[10px] font-mono text-[#A0A0A0]"
-        title="No Multum main drug code on file — either not in Multum or not yet loaded."
+        title="Not in Multum and no labeler+product sibling to inherit from."
       >
         —
       </span>
@@ -345,16 +388,29 @@ function MmdcChip({
   const label = [summary?.genericName, summary?.strengthDescription, summary?.doseFormDescription]
     .filter(Boolean)
     .join(' ')
+  const baseColor = mmdcColor(resolution.mmdc)
+  const tooltip = resolution.inferred
+    ? `Inferred MMDC ${resolution.mmdc} from labeler+product sibling ${resolution.inheritedFrom}. ${label || ''}`.trim()
+    : (label || `MMDC ${resolution.mmdc}`)
   return (
     <span
       className="text-[10px] font-mono font-bold px-1 leading-none inline-block"
       style={{
-        background: selected ? 'white' : mmdcColor(mmdc),
-        color: selected ? mmdcColor(mmdc) : 'white',
+        background: selected
+          ? 'white'
+          : resolution.inferred
+            ? 'transparent'
+            : baseColor,
+        color: selected
+          ? baseColor
+          : resolution.inferred
+            ? baseColor
+            : 'white',
+        border: resolution.inferred ? `1px dashed ${baseColor}` : 'none',
       }}
-      title={label || `MMDC ${mmdc}`}
+      title={tooltip}
     >
-      {mmdc}
+      {resolution.mmdc}{resolution.inferred ? '*' : ''}
     </span>
   )
 }
@@ -419,6 +475,19 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   const sources = useNdcSources(allNdcs)
   const scanCache = useAdminScanCache()
 
+  // Non-reference NDCs (inner / repackaged forms) — used to infer MMDC
+  // for rows that aren't in Multum themselves but share a labeler+product
+  // with a reference NDC that is.
+  const nonReferenceNdcs = useMemo(() => {
+    const s = new Set<string>()
+    for (const [ndc, perDomain] of ndcMap) {
+      for (const rec of perDomain.values()) {
+        if (rec.isNonReference) { s.add(ndc); break }
+      }
+    }
+    return s
+  }, [ndcMap])
+
   // Stewardship mode: filter to NDCs whose prod-region coverage is partial.
   // "Partial" is measured against the prod regions where the product
   // *exists* (not an absolute W/C/E) — an east-only product can still be
@@ -449,7 +518,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   // (NDCs that are clinically different products merged under one Cerner
   // build). Surface as a warning AND a per-row MMDC column so pharmacy
   // can immediately see which clinical product each NDC belongs to.
-  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache)
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache, nonReferenceNdcs)
   const mmdcMismatch = mmdcGroups.length >= 2
 
   // Highest scan count across all flexed NDCs — used to scale the per-row
@@ -467,13 +536,14 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   // When a force-stack is present, group the rows by MMDC so siblings
   // cluster together (matches how pharmacy thinks about the products
   // when deciding what to split). Within each group, keep the existing
-  // primary-first/all-domains-first/alphabetical sort.
+  // primary-first/all-domains-first/alphabetical sort. Uses the inferred
+  // MMDC for non-reference NDCs so they cluster with their reference siblings.
   if (mmdcMismatch) {
     visibleNdcs.sort((a, b) => {
-      const ma = sources[a]?.mmdc ?? Number.MAX_SAFE_INTEGER
-      const mb = sources[b]?.mmdc ?? Number.MAX_SAFE_INTEGER
+      const ma = resolveMmdc(a, sources, allNdcs, nonReferenceNdcs).mmdc ?? Number.MAX_SAFE_INTEGER
+      const mb = resolveMmdc(b, sources, allNdcs, nonReferenceNdcs).mmdc ?? Number.MAX_SAFE_INTEGER
       if (ma !== mb) return ma - mb
-      return 0  // preserve existing order within MMDC group
+      return 0
     })
   }
 
@@ -657,7 +727,11 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                   </TableCell>
                   {mmdcMismatch && (
                     <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
-                      <MmdcChip summary={sources[ndc]} selected={isSelected} />
+                      <MmdcChip
+                        resolution={resolveMmdc(ndc, sources, allNdcs, nonReferenceNdcs)}
+                        summary={sources[ndc]}
+                        selected={isSelected}
+                      />
                     </TableCell>
                   )}
                   {scanCache && (
@@ -780,18 +854,21 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
     return <SupplyUnionView domainRecords={domainRecords!} onCreateTask={onCreateTask} />
   }
 
-  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache)
+  const nonReferenceNdcs = new Set(supplyData.filter(r => r.isNonReference).map(r => r.ndc))
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache, nonReferenceNdcs)
   const mmdcMismatch = mmdcGroups.length >= 2
   const maxScans = scanCache
     ? Math.max(0, ...allNdcs.map(n => scansForNdc(n, scanCache)))
     : 0
 
-  // When force-stack is active, group rows by MMDC so siblings cluster
-  // together (preserves the existing primary-first ordering within group).
+  // When force-stack is active, group rows by MMDC (using inferred MMDCs
+  // for non-reference NDCs that share a labeler+product with a reference)
+  // so siblings cluster together and the inner-package rows sit next to
+  // their parent reference row.
   const orderedSupply = mmdcMismatch
     ? [...supplyData].sort((a, b) => {
-        const ma = sources[a.ndc]?.mmdc ?? Number.MAX_SAFE_INTEGER
-        const mb = sources[b.ndc]?.mmdc ?? Number.MAX_SAFE_INTEGER
+        const ma = resolveMmdc(a.ndc, sources, allNdcs, nonReferenceNdcs).mmdc ?? Number.MAX_SAFE_INTEGER
+        const mb = resolveMmdc(b.ndc, sources, allNdcs, nonReferenceNdcs).mmdc ?? Number.MAX_SAFE_INTEGER
         return ma - mb
       })
     : supplyData
@@ -904,7 +981,11 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   </TableCell>
                   {mmdcMismatch && (
                     <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
-                      <MmdcChip summary={summary} selected={isSelected} />
+                      <MmdcChip
+                        resolution={resolveMmdc(row.ndc, sources, allNdcs, nonReferenceNdcs)}
+                        summary={summary}
+                        selected={isSelected}
+                      />
                     </TableCell>
                   )}
                   {scanCache && (
