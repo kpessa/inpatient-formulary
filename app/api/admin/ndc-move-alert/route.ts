@@ -265,6 +265,11 @@ function buildCclQuery(cdmCodes: string[], lookbackDays: number): string {
        BARCODE = cmai.med_admin_barcode,
        FACILITY = uar_get_code_display(e.loc_facility_cd),
        SCAN_COUNT = count(*)
+from med_identifier mi,
+     ce_med_admin_ident cmai,
+     ce_med_admin_ident_reltn cmair,
+     clinical_event ce,
+     encounter e
 plan mi    where mi.value in (${inList})
 join cmai  where cmai.item_id = mi.item_id
              and cmai.valid_from_dt_tm > cnvtlookbehind("${lookbackDays}D")
