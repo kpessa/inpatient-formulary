@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import {
@@ -39,6 +39,40 @@ interface IdentifierRow {
   active: boolean
   primary: boolean
   fieldKey: string
+  /** Set to 'cdm' when this row's value comes from cdm_master (Charge
+   *  Services' billing data) rather than the formulary extract. The
+   *  renderer styles those rows distinctly so users can tell which side
+   *  of the build owns the value. */
+  source?: 'cdm'
+}
+
+interface CdmMasterEntry {
+  cdmCode: string
+  description: string
+  techDesc: string
+  procCode: string
+  revCode: string
+  divisor: string
+  glKey: string
+  insCode: string
+}
+
+/** Fetch CDM master entry for a given charge number — used to pull
+ *  Charge-Services-owned fields (CDM description, tech desc, proc code,
+ *  etc.) onto the Identifiers tab. Returns null when the CDM isn't in
+ *  cdm_master (typically a new build awaiting Charge Services review). */
+function useCdmMaster(chargeNumber: string | null | undefined): CdmMasterEntry | null {
+  const [entry, setEntry] = useState<CdmMasterEntry | null>(null)
+  useEffect(() => {
+    if (!chargeNumber) { setEntry(null); return }
+    let cancelled = false
+    fetch(`/api/cdm-master/${encodeURIComponent(chargeNumber)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled) setEntry(data as CdmMasterEntry | null) })
+      .catch(() => { if (!cancelled) setEntry(null) })
+    return () => { cancelled = true }
+  }, [chargeNumber])
+  return entry
 }
 
 interface IdentifiersTabProps {
@@ -108,7 +142,32 @@ export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainR
   const [extraRows, setExtraRows] = useState<IdentifierRow[]>([])
 
   const baseRows = buildRows(item)
-  const rows = [...baseRows, ...extraRows]
+
+  // Fetch CDM master entry for this product's charge_number. When present,
+  // injects 1-3 derived rows (description, tech desc, proc code) below
+  // the Charge Number row. Styled distinctly so users see they're owned
+  // by Charge Services, not the formulary extract.
+  const cdm = useCdmMaster(item?.identifiers?.chargeNumber)
+  const cdmRows: IdentifierRow[] = []
+  if (cdm) {
+    let cdmIdx = 1000  // distinct id range so the keys never collide with baseRows
+    const addCdm = (type: string, identifier: string, fieldKey: string) => {
+      if (!identifier) return
+      cdmRows.push({
+        id: cdmIdx++, type, identifier, active: true, primary: false,
+        fieldKey, source: 'cdm',
+      })
+    }
+    addCdm('CDM Description',     cdm.description, 'cdm.description')
+    // Skip tech_desc when it's identical to description — common case,
+    // showing both is just visual noise.
+    if (cdm.techDesc && cdm.techDesc !== cdm.description) {
+      addCdm('CDM Tech Description', cdm.techDesc, 'cdm.techDesc')
+    }
+    if (cdm.procCode) addCdm('CDM Proc Code', cdm.procCode, 'cdm.procCode')
+  }
+
+  const rows = [...baseRows, ...cdmRows, ...extraRows]
 
   const loadedDomains = domainRecords?.filter(dr => dr.item !== null) ?? []
   const hasDomainData = loadedDomains.length >= 2
@@ -174,11 +233,19 @@ export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainR
                       ? 'bg-[#FFF0E0] hover:bg-[#FFE0C0]'
                       : isHighlighted
                       ? 'bg-[#FFF3CD] hover:bg-[#FFE99A]'
+                      : row.source === 'cdm'
+                      ? 'bg-[#F4EFE0] hover:bg-[#EDE5CC] italic text-[#5A4A2E]'
                       : idx % 2 === 0
                       ? 'bg-white hover:bg-[#C7D5E8]'
                       : 'bg-[#F0F0F0] hover:bg-[#C7D5E8]'
                   }`}
-                  title={isLintViolated ? lintViolations!.get(row.fieldKey)!.map(v => `${v.patternName}: ${v.expected}`).join(' | ') : undefined}
+                  title={
+                    isLintViolated
+                      ? lintViolations!.get(row.fieldKey)!.map(v => `${v.patternName}: ${v.expected}`).join(' | ')
+                      : row.source === 'cdm'
+                      ? 'Derived from cdm_master (Charge Services data, not the formulary extract)'
+                      : undefined
+                  }
                   onClick={() => setSelectedRow(row.id)}
                 >
                   {hasDomainData && (
@@ -197,23 +264,51 @@ export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainR
                       )}
                     </TableCell>
                   )}
-                  <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8]">{row.type}</TableCell>
                   <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8]">
-                    <FieldDiffTooltip
-                      values={fieldValueMap?.[row.fieldKey]}
-                      fieldName={row.fieldKey}
-                      fieldLabel={row.type}
-                      onCreateTask={onCreateTask}
-                      className="max-w-[300px] truncate"
-                    >
-                      {row.identifier}
-                    </FieldDiffTooltip>
+                    {row.type}
+                    {row.source === 'cdm' && (
+                      <span
+                        className="ml-1 text-[8px] not-italic font-bold align-middle px-1 py-px"
+                        style={{ background: '#A66B00', color: 'white' }}
+                        title="Derived from cdm_master — Charge Services owns this value, not Cerner build."
+                      >
+                        CDM
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8]">
+                    {/* CDM-derived rows aren't stored per-domain — they come
+                        from the global cdm_master table — so skip the diff
+                        tooltip and just render the value. */}
+                    {row.source === 'cdm' ? (
+                      <span className="max-w-[300px] truncate inline-block">
+                        {row.identifier}
+                      </span>
+                    ) : (
+                      <FieldDiffTooltip
+                        values={fieldValueMap?.[row.fieldKey]}
+                        fieldName={row.fieldKey}
+                        fieldLabel={row.type}
+                        onCreateTask={onCreateTask}
+                        className="max-w-[300px] truncate"
+                      >
+                        {row.identifier}
+                      </FieldDiffTooltip>
+                    )}
                   </TableCell>
                   <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] text-center">
-                    <Checkbox checked={row.active} className="rounded-none border-[#808080] h-3.5 w-3.5" onClick={e => e.stopPropagation()} />
+                    {row.source === 'cdm' ? (
+                      <span className="text-[10px] text-[#A06000]" title="Always active in cdm_master">—</span>
+                    ) : (
+                      <Checkbox checked={row.active} className="rounded-none border-[#808080] h-3.5 w-3.5" onClick={e => e.stopPropagation()} />
+                    )}
                   </TableCell>
                   <TableCell className="h-5 px-2 py-0 text-center">
-                    <Checkbox checked={row.primary} className="rounded-none border-[#808080] h-3.5 w-3.5" onClick={e => e.stopPropagation()} />
+                    {row.source === 'cdm' ? (
+                      <span className="text-[10px] text-[#A06000]">—</span>
+                    ) : (
+                      <Checkbox checked={row.primary} className="rounded-none border-[#808080] h-3.5 w-3.5" onClick={e => e.stopPropagation()} />
+                    )}
                   </TableCell>
                 </TableRow>,
 
