@@ -503,20 +503,38 @@ function parseScanTsv(tsv: string): { rows: ScanRow[]; parseError: string | null
     return { rows: [], parseError: 'empty input' }
   }
 
+  // Detect separator from the first non-blank line. Discern Explorer can
+  // produce tab-, comma-, or multi-space-aligned output depending on
+  // whether the user copied from the report viewer vs an Excel save vs a
+  // raw text export. Try in that order.
+  const splitRow = pickSplitter(lines[0])
+  if (!splitRow) {
+    return {
+      rows: [],
+      parseError:
+        "couldn't detect column separator (tabs, commas, or multi-space). " +
+        'Make sure rows have at least 4 columns: DOMAIN, BARCODE, FACILITY, SCAN_COUNT.',
+    }
+  }
+
   // First line might be a header. Detect by column 4 not being a number.
-  const first = splitTabs(lines[0])
+  const first = splitRow(lines[0])
   const startIdx =
     first.length >= 4 && /domain/i.test(first[0]) && /scan/i.test(first[3]) ? 1 : 0
 
   const dedupe = new Map<string, ScanRow>()
+  let dataLines = 0
   for (let i = startIdx; i < lines.length; i++) {
-    const cols = splitTabs(lines[i])
+    const cols = splitRow(lines[i])
     if (cols.length < 4) continue
     const domain = cols[0]
     const barcode = cols[1].replace(/^"|"$/g, '')
-    const facility = cols[2].replace(/^"|"$/g, '')
-    const scanCount = Number(cols[3].replace(/[^0-9]/g, ''))
+    // Some splitters leave the facility column with spaces collapsed;
+    // also strip surrounding quotes.
+    const facility = cols.slice(2, cols.length - 1).join(' ').replace(/^"|"$/g, '').trim()
+    const scanCount = Number(cols[cols.length - 1].replace(/[^0-9.]/g, ''))
     if (!domain || !facility || !Number.isFinite(scanCount)) continue
+    dataLines++
     const key = `${domain}|${barcode}|${facility}`
     const existing = dedupe.get(key)
     if (existing) {
@@ -525,12 +543,34 @@ function parseScanTsv(tsv: string): { rows: ScanRow[]; parseError: string | null
       dedupe.set(key, { domain, barcode, facility, scanCount })
     }
   }
+  if (dataLines === 0) {
+    return {
+      rows: [],
+      parseError:
+        `parsed ${lines.length} non-empty line(s) but none had ≥4 columns. ` +
+        'Check that DOMAIN / BARCODE / FACILITY / SCAN_COUNT are all present.',
+    }
+  }
   return { rows: [...dedupe.values()], parseError: null }
 }
 
-function splitTabs(line: string): string[] {
-  // Discern Explorer's TSV uses literal tabs. If user pasted CSV, fall back
-  // to comma split (less common but handle gracefully).
-  if (line.includes('\t')) return line.split('\t').map(s => s.trim())
-  return line.split(',').map(s => s.trim())
+/** Pick a split function based on what the first line looks like. Tabs
+ *  win, then commas, then multi-space (2+ spaces — handles Discern report
+ *  viewer's column-aligned output where facility names contain single
+ *  spaces). Returns null when the line has fewer than 4 colums under any
+ *  attempted splitter. */
+function pickSplitter(firstLine: string): ((line: string) => string[]) | null {
+  if (firstLine.includes('\t')) {
+    return (l) => l.split('\t').map(s => s.trim())
+  }
+  if (/^[^,]+,[^,]+,[^,]+,/.test(firstLine)) {
+    // CSV-like — at least 4 comma-separated cells on the first line.
+    return (l) => l.split(',').map(s => s.trim())
+  }
+  // Fall back to multi-space (2+ whitespace chars). Single spaces inside
+  // facility names like "Spring Valley Hospital" stay intact.
+  if (/\s{2,}/.test(firstLine)) {
+    return (l) => l.split(/\s{2,}/).map(s => s.trim()).filter(Boolean)
+  }
+  return null
 }
