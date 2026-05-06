@@ -276,8 +276,8 @@ join cmai  where cmai.item_id = mi.item_id
 join cmair where cmair.ce_med_admin_ident_id = cmai.ce_med_admin_ident_id
 join ce    where cmair.event_id = ce.event_id
 join e     where ce.encntr_id = e.encntr_id
-group by curdomain, cmai.med_admin_barcode, e.loc_facility_cd
-order by curdomain, uar_get_code_display(e.loc_facility_cd), count(*) desc
+group by cmai.med_admin_barcode, e.loc_facility_cd
+order by uar_get_code_display(e.loc_facility_cd), count(*) desc
 with maxrec=1000, time=300`
 }
 
