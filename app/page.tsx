@@ -883,8 +883,11 @@ export default function PharmNetFormulary() {
         })}
       </div>
 
-      {/* Tab content area */}
-      <div className="bg-[#D4D0C8] flex-1 flex flex-col border border-[#808080] mx-3 mb-2 overflow-hidden min-h-0">
+      {/* Tab content area. `select-text` overrides the parent window's
+          `select-none` (which exists to protect drag-to-move from accidentally
+          selecting title-bar / chrome text). Without this, NDC / CDM / Pyxis
+          values inside tabs can't be highlighted and copied. */}
+      <div className="bg-[#D4D0C8] flex-1 flex flex-col border border-[#808080] mx-3 mb-2 overflow-hidden min-h-0 select-text">
         {activeTab === "oe-defaults" && <OEDefaultsTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'oe-defaults').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
         {activeTab === "dispense" && <DispenseTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'dispense').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
         {activeTab === "inventory" && <InventoryTab item={selectedItem} highlightedFields={computeTabDiffs(domainItemsList, 'inventory').fields} fieldValueMap={fieldValueMap} lintViolations={lintViolations} />}
