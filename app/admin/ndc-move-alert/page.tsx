@@ -20,16 +20,16 @@ import type { NdcMoveAlertResponse } from "@/app/api/admin/ndc-move-alert/route"
  *        • Unresolved — facility names the alias map didn't recognize
  */
 export default function NdcMoveAlertPage() {
-  const [cdmInput, setCdmInput] = useState("")
+  const [rawInput, setRawInput] = useState("")
   const [pastedTsv, setPastedTsv] = useState("")
   const [data, setData] = useState<NdcMoveAlertResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copiedQuery, setCopiedQuery] = useState(false)
 
-  const cdmCodes = useMemo(
-    () => cdmInput.split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
-    [cdmInput],
+  const inputs = useMemo(
+    () => rawInput.split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
+    [rawInput],
   )
 
   async function analyze(includeTsv: boolean) {
@@ -40,7 +40,7 @@ export default function NdcMoveAlertPage() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          cdmCodes,
+          inputs,
           pastedTsv: includeTsv ? pastedTsv : undefined,
         }),
       })
@@ -64,28 +64,69 @@ export default function NdcMoveAlertPage() {
           </div>
         )}
 
-        <Section title="Step 1 · Enter CDM codes">
+        <Section title="Step 1 · Enter NDCs and/or CDMs">
           <div className="text-[10px] text-[#606060] mb-1">
-            One CDM per line, or comma/space separated. Numeric only.
+            One per line, or comma/space separated. NDCs in 5-4-2 hyphenated form
+            (<code>45802-0060-70</code>) — scans will be filtered to only that
+            specific NDC. CDMs are numeric (<code>54116157</code>) — all scans
+            under the CDM are counted.
           </div>
           <textarea
-            value={cdmInput}
-            onChange={e => setCdmInput(e.target.value)}
+            value={rawInput}
+            onChange={e => setRawInput(e.target.value)}
             rows={4}
-            placeholder="54349287&#10;54337530&#10;54062112"
+            placeholder="45802-0060-70&#10;54116157"
             className="border border-[#808080] bg-white px-1.5 py-1 font-mono text-xs w-full"
           />
           <div className="flex gap-2 mt-2 items-center">
             <button
               onClick={() => analyze(false)}
-              disabled={loading || cdmCodes.length === 0}
+              disabled={loading || inputs.length === 0}
               className="border border-[#808080] bg-[#316AC5] hover:bg-[#2456A5] text-white px-2 py-0.5 text-xs disabled:opacity-50"
             >
               {loading ? '…' : 'Generate query'}
             </button>
-            <span className="text-[#606060]">{cdmCodes.length} CDM(s) entered</span>
+            <span className="text-[#606060]">{inputs.length} input(s)</span>
           </div>
         </Section>
+
+        {data && data.resolvedInputs.length > 0 && (
+          <Section title={`Resolved inputs · queries ${data.queriedCdms.length} CDM${data.queriedCdms.length !== 1 ? 's' : ''}`}>
+            <table className="w-full border-collapse text-xs">
+              <thead className="bg-[#E8E8E8]">
+                <tr>
+                  <th className="px-2 py-0.5 text-left w-32">Input</th>
+                  <th className="px-2 py-0.5 text-left w-16">Type</th>
+                  <th className="px-2 py-0.5 text-left">Resolved CDM(s)</th>
+                  <th className="px-2 py-0.5 text-left">Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.resolvedInputs.map(r => (
+                  <tr key={r.raw} className={`border-t border-[#E8E8E8] ${r.type === 'invalid' ? 'bg-red-50' : ''}`}>
+                    <td className="px-2 py-0.5 font-bold">{r.raw}</td>
+                    <td className="px-2 py-0.5 text-[10px]" style={{
+                      color: r.type === 'ndc' ? '#0F8C5C' : r.type === 'cdm' ? '#316AC5' : '#CC0000',
+                    }}>
+                      {r.type === 'ndc' ? 'NDC' : r.type === 'cdm' ? 'CDM' : 'invalid'}
+                    </td>
+                    <td className="px-2 py-0.5 font-mono">
+                      {r.cdmCodes.length === 0
+                        ? <span className="text-red-700 italic">— could not resolve to a CDM</span>
+                        : r.cdmCodes.join(', ')}
+                    </td>
+                    <td className="px-2 py-0.5">{r.description ?? <span className="text-[#A0A0A0]">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {data.ndcFilterActive && (
+              <div className="mt-2 text-[11px] text-[#0F8C5C]">
+                ✓ NDC filter active — only scan rows whose barcode matches an input NDC will be counted.
+              </div>
+            )}
+          </Section>
+        )}
 
         {data && (
           <>
@@ -132,7 +173,9 @@ export default function NdcMoveAlertPage() {
                 </button>
                 <span className="text-[#606060]">
                   {data.parsedScanRows > 0
-                    ? `${data.parsedScanRows} scan rows parsed`
+                    ? data.ndcFilterActive
+                      ? `${data.matchedScanRows} of ${data.parsedScanRows} rows matched the input NDC(s)`
+                      : `${data.parsedScanRows} scan rows parsed`
                     : 'No analysis yet'}
                 </span>
               </div>
@@ -255,6 +298,36 @@ function Results({ data }: { data: NdcMoveAlertResponse }) {
           ))}
         </div>
       </Section>
+
+      {data.unmatchedBarcodes.length > 0 && (
+        <Section title={`Unmatched barcodes (${data.unmatchedBarcodes.length}) — under parent CDM but ≠ input NDC`}>
+          <div className="text-[10px] text-[#606060] mb-1">
+            These barcodes were scanned at facilities under one of the queried
+            CDMs but didn't decode to any input NDC — different package size,
+            different manufacturer, or repackaged. Useful for verifying the
+            filter math: if a barcode here looks like the NDC you actually
+            care about, the input NDC may be off by one digit.
+          </div>
+          <table className="w-full border-collapse text-xs">
+            <thead className="bg-[#E8E8E8]">
+              <tr>
+                <th className="px-2 py-0.5 text-left w-36">Barcode</th>
+                <th className="px-2 py-0.5 text-left w-20">Domain</th>
+                <th className="px-2 py-0.5 text-right w-20">Scans</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.unmatchedBarcodes.map((u, idx) => (
+                <tr key={`${u.barcode}-${u.domain}-${idx}`} className="border-t border-[#E8E8E8]">
+                  <td className="px-2 py-0.5 font-mono">{u.barcode}</td>
+                  <td className="px-2 py-0.5 font-mono text-[#606060]">{u.domain}</td>
+                  <td className="px-2 py-0.5 text-right">{u.scanCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
 
       {data.unresolvedFacilities.length > 0 && (
         <Section title={`Unresolved (${data.unresolvedFacilities.length})`}>

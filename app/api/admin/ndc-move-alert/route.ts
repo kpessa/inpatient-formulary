@@ -23,7 +23,13 @@ import { getDb } from '@/lib/db'
 export const dynamic = 'force-dynamic'
 
 interface RequestBody {
-  cdmCodes: string[]
+  /** Mixed list of NDCs (5-4-2 hyphenated like "45802-0060-70") and/or CDMs
+   *  (numeric only like "54116157"). Auto-classified server-side. NDCs are
+   *  resolved to their parent CDM(s) via supply_records → formulary_groups
+   *  so the CCL still queries by CDM (the only thing item_id joins to),
+   *  but the parsed scan results get filtered to only barcodes matching
+   *  one of the input NDCs. */
+  inputs: string[]
   /** TSV pasted from Discern Explorer. Headers: DOMAIN, BARCODE, FACILITY, SCAN_COUNT.
    *  May be the concatenation of three runs (P152E/P152C/P152W) — curdomain
    *  self-tags each row, so we don't need to know which domain the user
@@ -56,50 +62,132 @@ interface UnresolvedFacility {
   scanCount: number
 }
 
+/** A scan whose barcode didn't decode to any input NDC (only present when
+ *  the input list contained at least one NDC — pure CDM inputs don't filter). */
+interface UnmatchedBarcode {
+  barcode: string
+  domain: string
+  scanCount: number
+}
+
+/** Maps an input-as-typed string to the resolution result. NDCs resolve to
+ *  one or more CDMs via supply_records; CDMs pass through. */
+interface ResolvedInput {
+  raw: string                  // what the user typed
+  type: 'ndc' | 'cdm' | 'invalid'
+  /** When type='ndc', the CDM(s) it's flexed under across prod domains.
+   *  When type='cdm', a single-element array containing itself. */
+  cdmCodes: string[]
+  /** When type='ndc', a normalized 11-digit form ("45802006070") used for
+   *  barcode matching. */
+  normalizedNdc?: string
+  /** Best-effort description for UI display. */
+  description: string | null
+}
+
 export interface NdcMoveAlertResponse {
   cclQuery: string
-  cdmCodes: string[]
-  /** Per-CDM resolved info: which group, description, which domains have it. */
+  resolvedInputs: ResolvedInput[]
+  /** Unique CDM codes hitting the CCL (union of inputCDMs + NDC-resolved CDMs). */
+  queriedCdms: string[]
+  /** Per-CDM context: description + flexed-facility mnemonics. */
   cdmContext: Array<{
     cdmCode: string
     description: string | null
-    flexedFacilities: string[]    // mnemonics with the CDM flexed in any prod domain
+    flexedFacilities: string[]
   }>
-  parsedScanRows: number          // total parsed (after dedupe)
-  tier1: FacilityAlert[]          // scanned in last N days (URGENT)
-  tier2: FacilityAlert[]          // flexed but no recent scans
+  /** True when at least one input was an NDC — meaning scans were filtered
+   *  by barcode-match. False when all inputs were CDMs (no filter, all scans
+   *  count). */
+  ndcFilterActive: boolean
+  parsedScanRows: number
+  matchedScanRows: number          // rows that matched an input NDC (or all rows if filter inactive)
+  tier1: FacilityAlert[]
+  tier2: FacilityAlert[]
   unresolvedFacilities: UnresolvedFacility[]
+  /** Scans excluded by the NDC filter — only populated when ndcFilterActive. */
+  unmatchedBarcodes: UnmatchedBarcode[]
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = (await req.json().catch(() => null)) as RequestBody | null
-  if (!body || !Array.isArray(body.cdmCodes) || body.cdmCodes.length === 0) {
-    return NextResponse.json({ error: 'cdmCodes (string[]) required' }, { status: 400 })
+  if (!body || !Array.isArray(body.inputs) || body.inputs.length === 0) {
+    return NextResponse.json({ error: 'inputs (string[]) required' }, { status: 400 })
   }
 
-  const cdmCodes = body.cdmCodes
-    .map(s => s.trim())
-    .filter(s => /^\d{4,12}$/.test(s))           // CDM codes are numeric
-  if (cdmCodes.length === 0) {
+  const lookbackDays = body.lookbackDays ?? 30
+  const db = getDb()
+
+  // Auto-classify each input as NDC, CDM, or invalid. An NDC is the
+  // hyphenated 5-4-2 form; a CDM is purely numeric (8-ish digits, but we
+  // accept 4-12 to be lenient). Anything else is flagged but doesn't
+  // abort — the user gets feedback in resolvedInputs.
+  const resolvedInputs: ResolvedInput[] = []
+  for (const raw of body.inputs.map(s => s.trim()).filter(Boolean)) {
+    if (/^\d{5}-\d{3,4}-\d{1,2}$/.test(raw)) {
+      // NDC. Resolve to CDM(s) via supply_records.
+      const { rows } = await db.execute({
+        sql: `SELECT DISTINCT fg.charge_number, fg.description
+              FROM supply_records sr
+              JOIN formulary_groups fg
+                ON fg.group_id = sr.group_id AND fg.domain = sr.domain
+              WHERE sr.ndc = ?
+                AND fg.environment = 'prod'
+                AND fg.charge_number != ''`,
+        args: [raw],
+      })
+      const cdms = [...new Set(rows.map(r => r.charge_number as string))]
+      resolvedInputs.push({
+        raw,
+        type: 'ndc',
+        cdmCodes: cdms,
+        normalizedNdc: raw.replace(/-/g, ''),
+        description: (rows[0]?.description as string | null) ?? null,
+      })
+    } else if (/^\d{4,12}$/.test(raw)) {
+      // CDM (numeric only). Look up its description for the UI.
+      const { rows } = await db.execute({
+        sql: `SELECT description FROM formulary_groups
+              WHERE charge_number = ? AND environment = 'prod' LIMIT 1`,
+        args: [raw],
+      })
+      resolvedInputs.push({
+        raw,
+        type: 'cdm',
+        cdmCodes: [raw],
+        description: (rows[0]?.description as string | null) ?? null,
+      })
+    } else {
+      resolvedInputs.push({
+        raw, type: 'invalid', cdmCodes: [], description: null,
+      })
+    }
+  }
+
+  const queriedCdms = [
+    ...new Set(resolvedInputs.flatMap(r => r.cdmCodes)),
+  ]
+  if (queriedCdms.length === 0) {
     return NextResponse.json(
-      { error: 'No valid CDM codes (must be numeric 4-12 digits)' },
+      {
+        error: 'No valid input could be resolved to a CDM. NDCs (5-4-2 form like 45802-0060-70) need to be flexed under a CDM in supply_records; CDMs must be numeric 4-12 digits.',
+        resolvedInputs,
+      },
       { status: 400 },
     )
   }
 
-  const lookbackDays = body.lookbackDays ?? 30
-  const cclQuery = buildCclQuery(cdmCodes, lookbackDays)
-
-  const db = getDb()
+  const cclQuery = buildCclQuery(queriedCdms, lookbackDays)
+  const ndcFilterActive = resolvedInputs.some(r => r.type === 'ndc')
 
   // ─── CDM context: lookup descriptions + flexed-facility lists ─────────
-  const placeholders = cdmCodes.map(() => '?').join(',')
+  const placeholders = queriedCdms.map(() => '?').join(',')
   const { rows: cdmRows } = await db.execute({
     sql: `SELECT charge_number, domain, description, inventory_json
           FROM formulary_groups
           WHERE charge_number IN (${placeholders})
             AND environment = 'prod'`,
-    args: cdmCodes,
+    args: queriedCdms,
   })
 
   // Group flexed-facility lookups by CDM. inventory_json.facilities is keyed
@@ -114,7 +202,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     flexedMnemonics: Set<string>
   }
   const ctxByCdm = new Map<string, CdmContext>()
-  for (const code of cdmCodes) {
+  for (const code of queriedCdms) {
     ctxByCdm.set(code, { cdmCode: code, description: null, flexedMnemonics: new Set() })
   }
   for (const r of cdmRows) {
@@ -135,16 +223,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!body.pastedTsv?.trim()) {
     const response: NdcMoveAlertResponse = {
       cclQuery,
-      cdmCodes,
+      resolvedInputs,
+      queriedCdms,
       cdmContext: [...ctxByCdm.values()].map(c => ({
         cdmCode: c.cdmCode,
         description: c.description,
         flexedFacilities: [...c.flexedMnemonics].sort(),
       })),
+      ndcFilterActive,
       parsedScanRows: 0,
+      matchedScanRows: 0,
       tier1: [],
       tier2: [],
       unresolvedFacilities: [],
+      unmatchedBarcodes: [],
     }
     return NextResponse.json(response)
   }
@@ -155,16 +247,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: `Could not parse pasted TSV: ${parseError}` }, { status: 400 })
   }
 
-  // ─── Aggregate scans per (mnemonic, cdmCode) ──────────────────────────
-  // Currently the CCL query returns barcodes, not CDM codes — but all rows
-  // it returns are for the CDM list we sent (via the IN clause), so we have
-  // to attribute scans across all input CDMs. Without per-row CDM tagging,
-  // v1 attributes the total scan count to ALL input CDMs uniformly. When
-  // multi-CDM analysis is needed, the CCL needs an extra column.
+  // ─── Filter scans by barcode-matches-input-NDC (when applicable) ──────
+  // When at least one input was an NDC, only count scans whose barcode
+  // normalizes to one of the input NDCs. Pure-CDM input (no NDCs) skips
+  // this filter and counts every scan.
+  const ndcMatchSet = new Set(
+    resolvedInputs
+      .filter(r => r.type === 'ndc' && r.normalizedNdc)
+      .map(r => r.normalizedNdc!),
+  )
+  const matchedRows = ndcFilterActive
+    ? scanRows.filter(r => barcodeMatchesAnyNdc(r.barcode, ndcMatchSet))
+    : scanRows
+  const unmatchedBarcodeMap = new Map<string, UnmatchedBarcode>()
+  if (ndcFilterActive) {
+    for (const r of scanRows) {
+      if (barcodeMatchesAnyNdc(r.barcode, ndcMatchSet)) continue
+      // Aggregate by (barcode, domain) so a barcode scanned at multiple
+      // facilities under the same domain reports a single roll-up.
+      const key = `${r.domain}|${r.barcode}`
+      const existing = unmatchedBarcodeMap.get(key)
+      if (existing) existing.scanCount += r.scanCount
+      else unmatchedBarcodeMap.set(key, { barcode: r.barcode, domain: r.domain, scanCount: r.scanCount })
+    }
+  }
+
+  // ─── Aggregate matched scans per mnemonic ─────────────────────────────
   const scansByMnemonic = new Map<string, { total: number; perDomain: Map<string, number> }>()
   const unresolved: UnresolvedFacility[] = []
 
-  for (const r of scanRows) {
+  for (const r of matchedRows) {
     const facLower = r.facility.toLowerCase()
     const mnemonic = aliasMap.get(facLower)
     if (!mnemonic) {
@@ -228,18 +340,46 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const response: NdcMoveAlertResponse = {
     cclQuery,
-    cdmCodes,
+    resolvedInputs,
+    queriedCdms,
     cdmContext: [...ctxByCdm.values()].map(c => ({
       cdmCode: c.cdmCode,
       description: c.description,
       flexedFacilities: [...c.flexedMnemonics].sort(),
     })),
+    ndcFilterActive,
     parsedScanRows: scanRows.length,
+    matchedScanRows: matchedRows.length,
     tier1,
     tier2,
     unresolvedFacilities: unresolved,
+    unmatchedBarcodes: [...unmatchedBarcodeMap.values()].sort((a, b) => b.scanCount - a.scanCount),
   }
   return NextResponse.json(response)
+}
+
+// ---------------------------------------------------------------------------
+// Barcode matching
+// ---------------------------------------------------------------------------
+
+/** Tries to determine whether a scanned barcode encodes one of the input
+ *  NDCs. Tolerant of common encodings:
+ *    - Bare 11-digit NDC (e.g. "45802006070")
+ *    - 12-digit UPC with leading zero (e.g. "045802006070")
+ *    - Trailing check digit (rare but possible — e.g. "458020060705")
+ *  Repackaged unit-dose with a custom internal barcode won't decode and
+ *  lands in unmatchedBarcodes for the user to inspect. */
+function barcodeMatchesAnyNdc(barcode: string, ndcSet: Set<string>): boolean {
+  const digits = barcode.replace(/[^0-9]/g, '')
+  if (!digits) return false
+  for (const ndc of ndcSet) {
+    if (digits === ndc) return true
+    if (digits.length === ndc.length + 1) {
+      if (digits.startsWith('0') && digits.slice(1) === ndc) return true
+      if (digits.slice(0, -1) === ndc) return true
+    }
+  }
+  return false
 }
 
 // ---------------------------------------------------------------------------
