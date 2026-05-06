@@ -161,3 +161,50 @@ export async function PATCH(
   })
   return NextResponse.json({ ok: true, mnemonic: m })
 }
+
+/**
+ * DELETE /api/admin/facilities/[mnemonic]
+ *
+ * Delete a facility and everything attached to it (contacts, aliases,
+ * Cerner code mappings) via the ON DELETE CASCADE constraints. Permanent;
+ * the UI must confirm before calling.
+ *
+ * Returns the cascaded counts so the UI can summarize what was removed.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ mnemonic: string }> },
+): Promise<NextResponse> {
+  const { mnemonic } = await params
+  const m = mnemonic.toUpperCase()
+  const db = getDb()
+
+  // SELECT first — embedded replica returns rowsAffected=0 for writes.
+  const { rows: existingRows } = await db.execute({
+    sql: 'SELECT 1 FROM facilities WHERE mnemonic = ?',
+    args: [m],
+  })
+  if (existingRows.length === 0) {
+    return NextResponse.json({ error: `Facility "${m}" not found` }, { status: 404 })
+  }
+
+  // Snapshot child counts so we can report what cascaded.
+  const [{ rows: ccRows }, { rows: caRows }, { rows: ckRows }] = await Promise.all([
+    db.execute({ sql: 'SELECT COUNT(*) AS n FROM pharmacy_contacts WHERE mnemonic = ?', args: [m] }),
+    db.execute({ sql: 'SELECT COUNT(*) AS n FROM facility_aliases   WHERE mnemonic = ?', args: [m] }),
+    db.execute({ sql: 'SELECT COUNT(*) AS n FROM facility_cerner_codes WHERE mnemonic = ?', args: [m] }),
+  ])
+  const cascadedContacts = Number(ccRows[0].n)
+  const cascadedAliases = Number(caRows[0].n)
+  const cascadedCernerCodes = Number(ckRows[0].n)
+
+  await db.execute({ sql: 'DELETE FROM facilities WHERE mnemonic = ?', args: [m] })
+
+  return NextResponse.json({
+    ok: true,
+    mnemonic: m,
+    cascadedContacts,
+    cascadedAliases,
+    cascadedCernerCodes,
+  })
+}

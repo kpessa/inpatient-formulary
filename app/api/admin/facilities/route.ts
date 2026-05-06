@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 
 /**
@@ -63,4 +63,61 @@ export async function GET(): Promise<NextResponse> {
     hasAnyPhone: Number(r.phone_count) > 0,
   }))
   return NextResponse.json({ facilities: list })
+}
+
+/**
+ * POST /api/admin/facilities
+ *
+ * Create a new canonical facility row. Mnemonic is the primary key and is
+ * uppercased on write — the rest of the app expects upper-case mnemonics
+ * everywhere. Long name is required; region and is_acute optional.
+ *
+ * 409 on mnemonic collision.
+ */
+interface CreateFacilityBody {
+  mnemonic: string
+  longName: string
+  region?: string | null
+  isAcute?: boolean
+  notes?: string | null
+}
+
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  const body = (await req.json().catch(() => null)) as CreateFacilityBody | null
+  if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+
+  const mnemonic = (body.mnemonic ?? '').trim().toUpperCase()
+  const longName = (body.longName ?? '').trim()
+  if (!/^[A-Z0-9]{2,8}$/.test(mnemonic)) {
+    return NextResponse.json(
+      { error: 'mnemonic must be 2–8 uppercase alphanumeric chars' },
+      { status: 400 },
+    )
+  }
+  if (!longName) {
+    return NextResponse.json({ error: 'longName is required' }, { status: 400 })
+  }
+
+  const region = body.region?.trim() || null
+  const isAcute = body.isAcute === false ? 0 : 1     // default acute=true
+  const notes = body.notes?.trim() || null
+
+  const db = getDb()
+  try {
+    await db.execute({
+      sql: `INSERT INTO facilities (mnemonic, long_name, region, is_acute, notes)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [mnemonic, longName, region, isAcute, notes],
+    })
+    return NextResponse.json({ ok: true, mnemonic }, { status: 201 })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/UNIQUE|PRIMARY/i.test(msg)) {
+      return NextResponse.json(
+        { error: `Facility "${mnemonic}" already exists` },
+        { status: 409 },
+      )
+    }
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
 }

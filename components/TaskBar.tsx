@@ -100,6 +100,16 @@ export function TaskBar({ openWindows, minimizedWindows, focusedWindow, isAdminM
                 <span className="w-3 text-center">{openWindows.has('standardization-backlog') ? '✓' : ''}</span>
                 <span>🛠️</span> Standardization Backlog
               </DropdownMenuItem>
+              {/* Facility Admin opens in a separate browser tab — it's a larger
+                  CRUD page that benefits from full-window space, and pharmacy
+                  rarely needs it side-by-side with the main desktop. */}
+              <DropdownMenuItem
+                className={MENU_ITEM_CLASS}
+                onSelect={() => window.open('/admin/facilities', '_blank', 'noopener,noreferrer')}
+              >
+                <span className="w-3 text-center">↗</span>
+                <span>🏥</span> Facility Admin
+              </DropdownMenuItem>
             </>
           )}
         </DropdownMenuContent>

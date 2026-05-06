@@ -98,6 +98,8 @@ function FacilityMetadata({
   const [isAcute, setIsAcute]   = useState(detail.isAcute)
   const [notes, setNotes]       = useState(detail.notes ?? "")
   const [saving, setSaving]     = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const dirty =
     longName !== detail.longName ||
@@ -119,6 +121,20 @@ function FacilityMetadata({
       onError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function deleteFacility() {
+    setDeleting(true)
+    try {
+      const r = await fetch(`/api/admin/facilities/${detail.mnemonic}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error((await r.json()).error ?? `HTTP ${r.status}`)
+      // Navigate back to the list so the user sees the deletion took effect.
+      window.location.href = '/admin/facilities'
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+      setDeleting(false)
+      setConfirmingDelete(false)
     }
   }
 
@@ -155,22 +171,57 @@ function FacilityMetadata({
           placeholder="Internal notes (optional)"
         />
       </div>
-      {dirty && (
-        <div className="mt-2 flex gap-2">
-          <button
-            onClick={save} disabled={saving}
-            className="border border-[#808080] bg-[#316AC5] text-white px-2 py-0.5 text-xs hover:bg-[#2456A5] disabled:opacity-50"
-          >
-            {saving ? 'Saving…' : 'Save metadata'}
-          </button>
-          <button
-            onClick={() => { setLongName(detail.longName); setRegion(detail.region ?? ""); setIsAcute(detail.isAcute); setNotes(detail.notes ?? "") }}
-            className="border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DBD0] text-black px-2 py-0.5 text-xs"
-          >
-            Cancel
-          </button>
+      <div className="mt-2 flex gap-2 items-center">
+        {dirty && (
+          <>
+            <button
+              onClick={save} disabled={saving}
+              className="border border-[#808080] bg-[#316AC5] text-white px-2 py-0.5 text-xs hover:bg-[#2456A5] disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save metadata'}
+            </button>
+            <button
+              onClick={() => { setLongName(detail.longName); setRegion(detail.region ?? ""); setIsAcute(detail.isAcute); setNotes(detail.notes ?? "") }}
+              className="border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DBD0] text-black px-2 py-0.5 text-xs"
+            >
+              Cancel
+            </button>
+          </>
+        )}
+
+        {/* Delete is a destructive action — two-step confirmation, with a
+            warning that lists what will cascade. */}
+        <div className="ml-auto">
+          {!confirmingDelete ? (
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              className="border border-[#808080] bg-[#D4D0C8] hover:bg-[#FFE0E0] text-black px-2 py-0.5 text-xs"
+            >
+              Delete facility…
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-[#CC0000]">
+                Permanently delete {detail.mnemonic}?
+                {' '}({detail.contacts.length} contacts, {detail.aliases.length} aliases,
+                {' '}{detail.cernerCodes.length} Cerner mappings will cascade)
+              </span>
+              <button
+                onClick={deleteFacility} disabled={deleting}
+                className="border border-[#000] bg-[#CC0000] hover:bg-[#A00000] text-white px-2 py-0.5 text-xs disabled:opacity-50"
+              >
+                {deleting ? 'Deleting…' : 'Confirm delete'}
+              </button>
+              <button
+                onClick={() => setConfirmingDelete(false)} disabled={deleting}
+                className="border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DBD0] text-black px-2 py-0.5 text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </Section>
   )
 }

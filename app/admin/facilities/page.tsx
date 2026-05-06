@@ -22,13 +22,15 @@ export default function FacilitiesAdminPage() {
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState<'all' | 'no_pd' | 'no_email' | 'no_phone' | 'acute' | 'bh'>('all')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [adding, setAdding] = useState(false)
 
   useEffect(() => {
     fetch('/api/admin/facilities')
       .then(r => r.json())
       .then((p: { facilities: FacilityListRow[] }) => setRows(p.facilities))
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
-  }, [])
+  }, [reloadKey])
 
   const filtered = useMemo(() => {
     if (!rows) return []
@@ -98,7 +100,27 @@ export default function FacilitiesAdminPage() {
           <FilterChip current={filter} value="no_email" label="No emails"     onSelect={setFilter} />
           <FilterChip current={filter} value="no_phone" label="No phones"     onSelect={setFilter} />
           <span className="text-[#606060] ml-auto">{filtered.length} shown</span>
+          <button
+            onClick={() => setAdding(true)}
+            className="border border-[#808080] bg-[#0F8C5C] text-white px-2 py-0.5 text-[11px] hover:bg-[#0A6E48]"
+          >
+            + Add Facility
+          </button>
         </div>
+
+        {adding && (
+          <AddFacilityForm
+            onCancel={() => setAdding(false)}
+            onCreated={mnemonic => {
+              setAdding(false)
+              setReloadKey(k => k + 1)
+              // Navigate to the new facility's detail page so the user can
+              // immediately add Cerner codes / contacts / aliases.
+              window.location.href = `/admin/facilities/${mnemonic}`
+            }}
+            onError={setError}
+          />
+        )}
 
         {/* Table */}
         <div className="border border-[#808080] bg-white overflow-auto max-h-[70vh]">
@@ -205,5 +227,111 @@ function Dot({ ok, label }: { ok: boolean; label: string }) {
     >
       {label}
     </span>
+  )
+}
+
+/** New-facility form rendered inline above the table when "+ Add Facility"
+ *  is clicked. On success the page navigates to the new detail page so the
+ *  user can immediately add contacts / aliases / Cerner code mappings. */
+function AddFacilityForm({
+  onCancel, onCreated, onError,
+}: {
+  onCancel: () => void
+  onCreated: (mnemonic: string) => void
+  onError: (e: string) => void
+}) {
+  const [mnemonic, setMnemonic] = useState("")
+  const [longName, setLongName] = useState("")
+  const [region, setRegion]     = useState("")
+  const [isAcute, setIsAcute]   = useState(true)
+  const [notes, setNotes]       = useState("")
+  const [saving, setSaving]     = useState(false)
+
+  async function save() {
+    setSaving(true)
+    try {
+      const r = await fetch('/api/admin/facilities', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mnemonic, longName, region: region || null, isAcute, notes: notes || null }),
+      })
+      if (!r.ok) throw new Error((await r.json()).error ?? `HTTP ${r.status}`)
+      const body = await r.json() as { mnemonic: string }
+      onCreated(body.mnemonic)
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="border-2 border-[#0F8C5C] bg-[#FFFAE5] p-3">
+      <div className="text-[11px] uppercase font-bold tracking-wide text-[#404040] mb-2">
+        New Facility
+      </div>
+      <div className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1 items-center">
+        <label className="text-[#606060]">Mnemonic *</label>
+        <input
+          value={mnemonic}
+          onChange={e => setMnemonic(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+          maxLength={8}
+          placeholder="e.g. NEWH"
+          className="border border-[#808080] bg-white px-1 py-0.5 w-32 font-bold uppercase"
+        />
+
+        <label className="text-[#606060]">Long Name *</label>
+        <input
+          value={longName}
+          onChange={e => setLongName(e.target.value)}
+          placeholder="e.g. New Hospital Medical Center"
+          className="border border-[#808080] bg-white px-1 py-0.5"
+        />
+
+        <label className="text-[#606060]">Region</label>
+        <input
+          value={region}
+          onChange={e => setRegion(e.target.value)}
+          placeholder="East / Central / West"
+          className="border border-[#808080] bg-white px-1 py-0.5 w-32"
+        />
+
+        <label className="text-[#606060]">Type</label>
+        <label className="flex gap-2 items-center">
+          <input type="checkbox" checked={isAcute} onChange={e => setIsAcute(e.target.checked)} />
+          <span>Acute care hospital (uncheck for BH)</span>
+        </label>
+
+        <label className="text-[#606060]">Notes</label>
+        <textarea
+          value={notes}
+          onChange={e => setNotes(e.target.value)}
+          rows={2}
+          placeholder="Internal notes (optional)"
+          className="border border-[#808080] bg-white px-1 py-0.5 font-mono text-xs"
+        />
+      </div>
+
+      <div className="text-[10px] text-[#606060] mt-2 mb-2">
+        After creation you'll be taken to the detail page to add Cerner code mappings, contacts, and aliases.
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={save}
+          disabled={saving || !mnemonic || !longName}
+          className="border border-[#000] bg-[#0F8C5C] text-white px-3 py-0.5 text-xs hover:bg-[#0A6E48] disabled:opacity-50"
+        >
+          {saving ? 'Creating…' : 'Create facility'}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          className="border border-[#808080] bg-[#D4D0C8] hover:bg-[#E0DBD0] text-black px-3 py-0.5 text-xs"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   )
 }
