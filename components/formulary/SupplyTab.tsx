@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/context-menu"
 import type { FormularyItem, SupplyRecord } from "@/lib/types"
 import type { FieldValueMap, DomainRecord, DomainValue } from "@/lib/formulary-diff"
-import { useNdcSources } from "@/lib/use-ndc-sources"
+import { useNdcSources, type NdcSourcesSummary } from "@/lib/use-ndc-sources"
 import { NdcSourceBadges, NdcPillIdInline } from "./NdcSourceBadges"
 import { NdcDomainCoverage } from "./NdcDomainCoverage"
 import { NdcDetailPopover } from "./NdcDetailPopover"
@@ -159,49 +159,58 @@ function computeMmdcGroups(
   return real.sort((a, b) => b.ndcs.length - a.ndcs.length || a.mmdc - b.mmdc)
 }
 
-/** Banner that fires only when 2+ distinct MMDCs are flexed under the
- *  current product. Shows a one-line summary ("Mixed MMDCs: 4 of one drug,
- *  7 of another") plus collapsible per-group NDC list so pharmacy can
- *  spot which NDCs belong to which clinical product. */
+/** One-line warning above the supply table when 2+ MMDCs are flexed.
+ *  Per-row detail now lives in the conditionally-rendered MMDC column,
+ *  so this banner is intentionally compact — just a short summary
+ *  pointing the pharmacist at the column. */
 function MmdcMismatchBanner({ groups }: { groups: MmdcGroup[] }) {
   if (groups.length < 2) return null
-  const summaryLine = groups
+  const summary = groups
     .map(g => `${g.ndcs.length} × MMDC ${g.mmdc}`)
     .join(' · ')
   return (
-    <details className="border-y border-[#CC0000] bg-[#FFF0E0]">
-      <summary className="cursor-pointer px-2 py-1 text-xs font-mono">
-        <span className="font-bold text-[#CC0000]">⚠ MMDC mismatch — possible force-stack</span>
-        <span className="ml-2 text-[#404040]">
-          {groups.length} distinct Multum drug codes flexed under this CDM ({summaryLine})
-        </span>
-        <span className="ml-2 text-[10px] text-[#808080] italic">click to expand</span>
-      </summary>
-      <div className="px-2 pb-2 text-[11px] font-mono space-y-1.5">
-        <div className="text-[10px] text-[#606060]">
-          Multum considers these clinically different products. Two NDCs with
-          different MMDCs in the same CDM means pharmacy or build folks merged
-          unrelated drugs at some point — usually worth splitting into separate
-          CDMs (file a build ticket).
-        </div>
-        {groups.map(g => (
-          <div key={g.mmdc} className="border border-[#E0C0C0] bg-white p-1.5">
-            <div className="flex items-baseline gap-2">
-              <span className="font-bold" style={{ color: mmdcColor(g.mmdc) }}>
-                MMDC {g.mmdc}
-              </span>
-              <span className="text-[#404040]">{g.label}</span>
-              <span className="text-[10px] text-[#808080] ml-auto">
-                {g.ndcs.length} NDC{g.ndcs.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="text-[10px] mt-0.5 break-all text-[#404040]">
-              {g.ndcs.join(', ')}
-            </div>
-          </div>
-        ))}
-      </div>
-    </details>
+    <div className="px-2 py-1 border-y border-[#CC0000] bg-[#FFF0E0] text-xs font-mono flex items-baseline gap-2 flex-wrap">
+      <span className="font-bold text-[#CC0000]">⚠ Force-stack — {groups.length} MMDCs in this CDM</span>
+      <span className="text-[#404040]">{summary}</span>
+      <span className="text-[10px] text-[#606060] italic ml-auto">
+        per-row breakdown in the MMDC column →
+      </span>
+    </div>
+  )
+}
+
+/** Per-row chip showing the NDC's Multum main drug code, color-coded by
+ *  the same stable per-MMDC palette as everywhere else. Tooltip carries
+ *  the full clinical identity ("bacitracin topical zinc 500 units/g
+ *  ointment"). Falls back to a grey "—" for NDCs without a Multum match. */
+function MmdcChip({
+  summary, selected,
+}: { summary: NdcSourcesSummary | undefined; selected: boolean }) {
+  const mmdc = summary?.mmdc ?? null
+  if (mmdc == null) {
+    return (
+      <span
+        className="text-[10px] font-mono text-[#A0A0A0]"
+        title="No Multum main drug code on file — either not in Multum or not yet loaded."
+      >
+        —
+      </span>
+    )
+  }
+  const label = [summary?.genericName, summary?.strengthDescription, summary?.doseFormDescription]
+    .filter(Boolean)
+    .join(' ')
+  return (
+    <span
+      className="text-[10px] font-mono font-bold px-1 leading-none inline-block"
+      style={{
+        background: selected ? 'white' : mmdcColor(mmdc),
+        color: selected ? mmdcColor(mmdc) : 'white',
+      }}
+      title={label || `MMDC ${mmdc}`}
+    >
+      {mmdc}
+    </span>
   )
 }
 
@@ -288,8 +297,10 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   // MMDC mismatch detection — group flexed NDCs by their Multum main drug
   // code. When >1 distinct MMDC is present, this CDM contains a force-stack
   // (NDCs that are clinically different products merged under one Cerner
-  // build). Surface as a warning so pharmacy can split the product.
+  // build). Surface as a warning AND a per-row MMDC column so pharmacy
+  // can immediately see which clinical product each NDC belongs to.
   const mmdcGroups = computeMmdcGroups(allNdcs, sources)
+  const mmdcMismatch = mmdcGroups.length >= 2
 
   return (
     <div className="flex flex-col h-full text-xs font-mono">
@@ -359,6 +370,14 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
+              {mmdcMismatch && (
+                <TableHead
+                  className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-20 text-center"
+                  title="Multum main drug code — surfaced when NDCs under this CDM resolve to multiple clinical products (force-stack)"
+                >
+                  MMDC
+                </TableHead>
+              )}
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
               <TableHead className="h-6 px-2 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
@@ -453,6 +472,11 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                       hasMultum={!!sources[ndc]?.inMultum}
                     />
                   </TableCell>
+                  {mmdcMismatch && (
+                    <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
+                      <MmdcChip summary={sources[ndc]} selected={isSelected} />
+                    </TableCell>
+                  )}
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
                     <NdcDomainCoverage ndc={ndc} domainRecords={domainRecords} />
                   </TableCell>
@@ -490,7 +514,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                           {dr.badge}
                         </span>
                       </TableCell>
-                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={6}>
+                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={mmdcMismatch ? 7 : 6}>
                         {rec
                           ? segments
                             ? segments.map((seg, j) =>
@@ -509,7 +533,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
             })}
             {visibleNdcs.length === 0 && (
               <TableRow>
-                <TableCell colSpan={10} className="text-center py-4 text-[#808080]">
+                <TableCell colSpan={mmdcMismatch ? 11 : 10} className="text-center py-4 text-[#808080]">
                   {allNdcs.length === 0
                     ? "No supply records"
                     : "All NDCs are fully stacked across loaded prod regions."}
@@ -564,6 +588,7 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
   }
 
   const mmdcGroups = computeMmdcGroups(allNdcs, sources)
+  const mmdcMismatch = mmdcGroups.length >= 2
 
   return (
     <div className="flex flex-col h-full text-xs font-mono">
@@ -613,6 +638,14 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
+              {mmdcMismatch && (
+                <TableHead
+                  className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-20 text-center"
+                  title="Multum main drug code — surfaced when NDCs under this CDM resolve to multiple clinical products (force-stack)"
+                >
+                  MMDC
+                </TableHead>
+              )}
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
@@ -655,6 +688,11 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] font-mono">
                     <ClickableNdc ndc={row.ndc} isSelected={isSelected} hasMultum={!!summary?.inMultum} />
                   </TableCell>
+                  {mmdcMismatch && (
+                    <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
+                      <MmdcChip summary={summary} selected={isSelected} />
+                    </TableCell>
+                  )}
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
                     {row.ndc && <NdcDomainCoverage ndc={row.ndc} domainRecords={domainRecords} />}
                   </TableCell>
