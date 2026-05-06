@@ -121,6 +121,11 @@ export interface NdcMoveAlertResponse {
   unresolvedFacilities: UnresolvedFacility[]
   /** Scans excluded by the NDC filter — only populated when ndcFilterActive. */
   unmatchedBarcodes: UnmatchedBarcode[]
+  /** Aggregated barcode-totals map (normalized-digit barcode → scan count
+   *  summed across all facilities + domains). Used by the page to warm the
+   *  shared admin-scan localStorage cache so the Supply tab and other
+   *  views can overlay usage data on their NDC lists. */
+  barcodeTotals: Record<string, number>
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -336,6 +341,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       tier2: [],
       unresolvedFacilities: [],
       unmatchedBarcodes: [],
+      barcodeTotals: {},
     }
     return NextResponse.json(response)
   }
@@ -444,6 +450,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   tier2.sort((a, b) => a.mnemonic.localeCompare(b.mnemonic))
 
+  // Aggregate every parsed scan row's barcode → total count, regardless of
+  // whether it matched the input NDC filter. The cache stores everything
+  // so other views can overlay scan counts on NDCs that weren't part of
+  // this particular query.
+  const barcodeTotals: Record<string, number> = {}
+  for (const r of scanRows) {
+    const norm = r.barcode.replace(/[^0-9]/g, '')
+    if (!norm) continue
+    barcodeTotals[norm] = (barcodeTotals[norm] ?? 0) + r.scanCount
+  }
+
   const response: NdcMoveAlertResponse = {
     cclQuery,
     resolvedInputs,
@@ -460,6 +477,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     tier2,
     unresolvedFacilities: unresolved,
     unmatchedBarcodes: [...unmatchedBarcodeMap.values()].sort((a, b) => b.scanCount - a.scanCount),
+    barcodeTotals,
   }
   return NextResponse.json(response)
 }

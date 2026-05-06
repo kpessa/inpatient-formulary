@@ -1,6 +1,11 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import {
+  getAdminScanCache,
+  scansForNdc,
+  type AdminScanCache,
+} from "@/lib/admin-scan-cache"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import {
@@ -119,22 +124,44 @@ function copyToClipboard(text: string): void {
   })
 }
 
+/** Subscribe to the admin-scan localStorage cache, re-rendering when the
+ *  NDC Move Alert page warms it (via the 'admin-scan-cache-updated' event)
+ *  or when another tab writes (via the native 'storage' event). */
+function useAdminScanCache(): AdminScanCache | null {
+  const [cache, setCache] = useState<AdminScanCache | null>(() => getAdminScanCache())
+  useEffect(() => {
+    const refresh = () => setCache(getAdminScanCache())
+    window.addEventListener('admin-scan-cache-updated', refresh)
+    window.addEventListener('storage', refresh)
+    return () => {
+      window.removeEventListener('admin-scan-cache-updated', refresh)
+      window.removeEventListener('storage', refresh)
+    }
+  }, [])
+  return cache
+}
+
 interface MmdcGroup {
   mmdc: number
   ndcs: string[]
   label: string  // "bacitracin topical 500 units/g ointment" — best-effort identity
+  /** Aggregate scan count across this group's NDCs from the admin-scan
+   *  cache, when loaded. 0 when no scan data is available — UI should
+   *  hide rather than show "0". */
+  totalScans: number
 }
 
 /** Group flexed NDCs by their Multum main_multum_drug_code so we can detect
  *  force-stacks (multiple distinct MMDCs flexed under one CDM = clinically
  *  different products merged in Cerner build). NDCs with no Multum data
  *  (`mmdc=null`) get bucketed under a synthetic "no MMDC" group so they're
- *  still visible. */
+ *  still visible. Sums admin-scan counts per group when scan cache is loaded. */
 function computeMmdcGroups(
   ndcs: readonly string[],
   sources: ReturnType<typeof useNdcSources>,
+  scanCache: AdminScanCache | null,
 ): MmdcGroup[] {
-  const byMmdc = new Map<number | null, { ndcs: string[]; label: string | null }>()
+  const byMmdc = new Map<number | null, { ndcs: string[]; label: string | null; totalScans: number }>()
   for (const ndc of ndcs) {
     const summary = sources[ndc]
     const mmdc = summary?.mmdc ?? null
@@ -143,20 +170,65 @@ function computeMmdcGroups(
           .filter(Boolean)
           .join(' ')
       : null
-    if (!byMmdc.has(mmdc)) byMmdc.set(mmdc, { ndcs: [], label: null })
+    if (!byMmdc.has(mmdc)) byMmdc.set(mmdc, { ndcs: [], label: null, totalScans: 0 })
     const entry = byMmdc.get(mmdc)!
     entry.ndcs.push(ndc)
+    entry.totalScans += scansForNdc(ndc, scanCache)
     if (!entry.label && label) entry.label = label
   }
-  // Drop the no-MMDC bucket only when EVERY ndc has no Multum data — in
-  // that case the data is just absent (not a mismatch). Otherwise keep
-  // it visible so users see "and these N have no Multum match" alongside
-  // the real groups.
   const real = [...byMmdc.entries()]
     .filter(([k]) => k != null)
-    .map(([k, v]) => ({ mmdc: k as number, ndcs: v.ndcs, label: v.label ?? `MMDC ${k}` }))
+    .map(([k, v]) => ({
+      mmdc: k as number,
+      ndcs: v.ndcs,
+      label: v.label ?? `MMDC ${k}`,
+      totalScans: v.totalScans,
+    }))
   if (real.length === 0) return []
   return real.sort((a, b) => b.ndcs.length - a.ndcs.length || a.mmdc - b.mmdc)
+}
+
+/** Inline horizontal bar showing this NDC's scan count relative to the
+ *  product's max-scanned NDC. Helps eye-pick the heavily-used products
+ *  vs the long tail. Displays the raw number to the right of the bar. */
+function ScanBar({
+  count, max, selected,
+}: { count: number; max: number; selected: boolean }) {
+  if (count === 0 && max === 0) {
+    return <span className="text-[10px] text-[#A0A0A0]">—</span>
+  }
+  const pct = max === 0 ? 0 : Math.round((count / max) * 100)
+  // Heuristic threshold for "this is the heavily-used one(s)": ≥80% of max.
+  const isTop = max > 0 && count >= max * 0.8 && count > 0
+  return (
+    <div className="flex items-center gap-1 leading-none">
+      <div
+        className="h-2 flex-1 min-w-[24px] max-w-[80px]"
+        style={{ background: selected ? 'rgba(255,255,255,0.25)' : '#E8E8E8' }}
+        title={`${count.toLocaleString()} scans`}
+      >
+        <div
+          className="h-full"
+          style={{
+            width: `${pct}%`,
+            background: count === 0
+              ? 'transparent'
+              : selected
+                ? 'white'
+                : isTop ? '#0F8C5C' : '#7A9CC0',
+          }}
+        />
+      </div>
+      <span
+        className={`text-[10px] font-mono tabular-nums ${
+          count === 0 ? 'text-[#A0A0A0]' : isTop ? 'font-bold' : ''
+        }`}
+        title={`${count.toLocaleString()} scans`}
+      >
+        {count.toLocaleString()}
+      </span>
+    </div>
+  )
 }
 
 /** Force-stack warning above the supply table — fires when 2+ distinct
@@ -213,6 +285,15 @@ function MmdcGroupCard({ group }: { group: MmdcGroup }) {
         <span className="text-[10px] text-[#808080]">
           {group.ndcs.length} NDC{group.ndcs.length !== 1 ? 's' : ''}
         </span>
+        {group.totalScans > 0 && (
+          <span
+            className="text-[10px] font-mono font-bold tabular-nums px-1 leading-none"
+            style={{ background: '#0F8C5C', color: 'white' }}
+            title="Aggregate scan count across this group's NDCs from the loaded admin-scan data"
+          >
+            {group.totalScans.toLocaleString()} scans
+          </span>
+        )}
         <div className="ml-auto flex gap-1">
           <button
             onClick={() => {
@@ -336,6 +417,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
 
   const diffCount = allNdcs.filter(getNdcDiff).length
   const sources = useNdcSources(allNdcs)
+  const scanCache = useAdminScanCache()
 
   // Stewardship mode: filter to NDCs whose prod-region coverage is partial.
   // "Partial" is measured against the prod regions where the product
@@ -355,7 +437,11 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
     return present > 0 && present < prodRegionsLoaded.length
   }
   const partialCount = allNdcs.filter(isPartialStack).length
-  const visibleNdcs = gapsOnly ? allNdcs.filter(isPartialStack) : allNdcs
+  // Always copy — we may mutate-sort below when MMDC mismatch is present,
+  // and we never want that to leak back into `allNdcs`.
+  const visibleNdcs: string[] = gapsOnly
+    ? allNdcs.filter(isPartialStack)
+    : [...allNdcs]
   const canShowGapsControls = prodRegionsLoaded.length >= 2
 
   // MMDC mismatch detection — group flexed NDCs by their Multum main drug
@@ -363,8 +449,33 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
   // (NDCs that are clinically different products merged under one Cerner
   // build). Surface as a warning AND a per-row MMDC column so pharmacy
   // can immediately see which clinical product each NDC belongs to.
-  const mmdcGroups = computeMmdcGroups(allNdcs, sources)
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache)
   const mmdcMismatch = mmdcGroups.length >= 2
+
+  // Highest scan count across all flexed NDCs — used to scale the per-row
+  // bar so the most-used product reads as a full bar.
+  const maxScans = useMemo(() => {
+    if (!scanCache) return 0
+    let max = 0
+    for (const ndc of allNdcs) {
+      const n = scansForNdc(ndc, scanCache)
+      if (n > max) max = n
+    }
+    return max
+  }, [allNdcs, scanCache])
+
+  // When a force-stack is present, group the rows by MMDC so siblings
+  // cluster together (matches how pharmacy thinks about the products
+  // when deciding what to split). Within each group, keep the existing
+  // primary-first/all-domains-first/alphabetical sort.
+  if (mmdcMismatch) {
+    visibleNdcs.sort((a, b) => {
+      const ma = sources[a]?.mmdc ?? Number.MAX_SAFE_INTEGER
+      const mb = sources[b]?.mmdc ?? Number.MAX_SAFE_INTEGER
+      if (ma !== mb) return ma - mb
+      return 0  // preserve existing order within MMDC group
+    })
+  }
 
   return (
     <div className="flex flex-col h-full text-xs font-mono">
@@ -440,6 +551,14 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                   title="Multum main drug code — surfaced when NDCs under this CDM resolve to multiple clinical products (force-stack)"
                 >
                   MMDC
+                </TableHead>
+              )}
+              {scanCache && (
+                <TableHead
+                  className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-32 text-right"
+                  title={`Admin barcode scans in last ${scanCache.lookbackDays} days, summed across all facilities. Loaded ${new Date(scanCache.loadedAt).toLocaleString()}.`}
+                >
+                  Scans ({scanCache.lookbackDays}D)
                 </TableHead>
               )}
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
@@ -541,6 +660,15 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                       <MmdcChip summary={sources[ndc]} selected={isSelected} />
                     </TableCell>
                   )}
+                  {scanCache && (
+                    <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                      <ScanBar
+                        count={scansForNdc(ndc, scanCache)}
+                        max={maxScans}
+                        selected={isSelected}
+                      />
+                    </TableCell>
+                  )}
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
                     <NdcDomainCoverage ndc={ndc} domainRecords={domainRecords} />
                   </TableCell>
@@ -578,7 +706,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
                           {dr.badge}
                         </span>
                       </TableCell>
-                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={mmdcMismatch ? 7 : 6}>
+                      <TableCell className="h-5 px-2 py-0 border-r border-[#D4D0C8] font-mono" colSpan={(mmdcMismatch ? 7 : 6) + (scanCache ? 1 : 0)}>
                         {rec
                           ? segments
                             ? segments.map((seg, j) =>
@@ -597,7 +725,7 @@ function SupplyUnionView({ domainRecords, onCreateTask }: { domainRecords: Domai
             })}
             {visibleNdcs.length === 0 && (
               <TableRow>
-                <TableCell colSpan={mmdcMismatch ? 11 : 10} className="text-center py-4 text-[#808080]">
+                <TableCell colSpan={(mmdcMismatch ? 11 : 10) + (scanCache ? 1 : 0)} className="text-center py-4 text-[#808080]">
                   {allNdcs.length === 0
                     ? "No supply records"
                     : "All NDCs are fully stacked across loaded prod regions."}
@@ -646,13 +774,27 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
     [supplyData, useUnionView],
   )
   const sources = useNdcSources(allNdcs)
+  const scanCache = useAdminScanCache()
 
   if (useUnionView) {
     return <SupplyUnionView domainRecords={domainRecords!} onCreateTask={onCreateTask} />
   }
 
-  const mmdcGroups = computeMmdcGroups(allNdcs, sources)
+  const mmdcGroups = computeMmdcGroups(allNdcs, sources, scanCache)
   const mmdcMismatch = mmdcGroups.length >= 2
+  const maxScans = scanCache
+    ? Math.max(0, ...allNdcs.map(n => scansForNdc(n, scanCache)))
+    : 0
+
+  // When force-stack is active, group rows by MMDC so siblings cluster
+  // together (preserves the existing primary-first ordering within group).
+  const orderedSupply = mmdcMismatch
+    ? [...supplyData].sort((a, b) => {
+        const ma = sources[a.ndc]?.mmdc ?? Number.MAX_SAFE_INTEGER
+        const mb = sources[b.ndc]?.mmdc ?? Number.MAX_SAFE_INTEGER
+        return ma - mb
+      })
+    : supplyData
 
   return (
     <div className="flex flex-col h-full text-xs font-mono">
@@ -710,6 +852,14 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   MMDC
                 </TableHead>
               )}
+              {scanCache && (
+                <TableHead
+                  className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-32 text-right"
+                  title={`Admin barcode scans in last ${scanCache.lookbackDays} days, summed across all facilities. Loaded ${new Date(scanCache.loadedAt).toLocaleString()}.`}
+                >
+                  Scans ({scanCache.lookbackDays}D)
+                </TableHead>
+              )}
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-16" title="Stacked in West / Central / East prod">WCE</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-20" title="Multum / DailyMed / Orange Book">Sources</TableHead>
               <TableHead className="h-6 px-1 text-xs font-mono text-foreground border-r border-[#808080] w-40">Pill ID</TableHead>
@@ -727,7 +877,7 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
             </TableRow>
           </TableHeader>
           <TableBody>
-            {supplyData.map((row, idx) => {
+            {orderedSupply.map((row, idx) => {
               const isSelected = selectedNdc === row.ndc
               const summary = row.ndc ? sources[row.ndc] : undefined
               const isInactive = !row.isActive
@@ -755,6 +905,15 @@ export function SupplyTab({ item, highlightedFields, domainRecords, onCreateTask
                   {mmdcMismatch && (
                     <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8] text-center">
                       <MmdcChip summary={summary} selected={isSelected} />
+                    </TableCell>
+                  )}
+                  {scanCache && (
+                    <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">
+                      <ScanBar
+                        count={row.ndc ? scansForNdc(row.ndc, scanCache) : 0}
+                        max={maxScans}
+                        selected={isSelected}
+                      />
                     </TableCell>
                   )}
                   <TableCell className="h-5 px-1 py-0 border-r border-[#D4D0C8]">

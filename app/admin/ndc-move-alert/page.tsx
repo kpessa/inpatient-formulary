@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react"
 import Link from "next/link"
 import { AdminWindowFrame } from "@/components/admin/AdminWindowFrame"
 import type { NdcMoveAlertResponse } from "@/app/api/admin/ndc-move-alert/route"
+import { setAdminScanCache } from "@/lib/admin-scan-cache"
 
 /**
  * NDC-move-alert workflow — `/admin/ndc-move-alert`.
@@ -57,7 +58,22 @@ export default function NdcMoveAlertPage() {
         }),
       })
       if (!r.ok) throw new Error((await r.json()).error ?? `HTTP ${r.status}`)
-      setData(await r.json())
+      const json = await r.json() as NdcMoveAlertResponse
+      setData(json)
+      // Persist barcode totals to the shared admin-scan cache so the Supply
+      // tab and other views can overlay usage data on their NDC lists.
+      // Skip when no TSV was pasted (the no-data response carries an empty
+      // map and would clobber a previously loaded cache).
+      if (includeTsv && Object.keys(json.barcodeTotals ?? {}).length > 0) {
+        const totalScans = Object.values(json.barcodeTotals).reduce((a, b) => a + b, 0)
+        setAdminScanCache({
+          loadedAt: new Date().toISOString(),
+          lookbackDays: 30,
+          totalScans,
+          uniqueBarcodes: Object.keys(json.barcodeTotals).length,
+          barcodeTotals: json.barcodeTotals,
+        })
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
