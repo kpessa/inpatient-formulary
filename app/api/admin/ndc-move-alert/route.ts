@@ -248,23 +248,32 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 /** Build the parameterized CCL query the user runs in Discern Explorer.
  *  curdomain self-tags each row so the user can concatenate three runs
- *  (P152E/P152C/P152W) into one paste without manually adding domain. */
+ *  (P152E/P152C/P152W) into one paste without manually adding domain.
+ *
+ *  Index strategy — drive from med_identifier first (tiny IN-list resolves
+ *  via the indexed mi.value), then probe cmai.item_id (also indexed). The
+ *  alternative pattern of `plan cmai where cmai.item_id IN (subquery)` lets
+ *  the CCL optimizer pick the cmai.valid_from_dt_tm index as the leading
+ *  access path — which on a busy site means scanning every admin-scan in
+ *  the lookback window across every drug, then filtering. Driving from mi
+ *  keeps the working set narrow and applies the date as a row-level filter
+ *  on already-narrow cmai rows. Time budget bumped to 300s to absorb
+ *  larger lookbacks without timing out. */
 function buildCclQuery(cdmCodes: string[], lookbackDays: number): string {
   const inList = cdmCodes.map(c => `"${c}"`).join(', ')
   return `select DOMAIN = curdomain,
        BARCODE = cmai.med_admin_barcode,
        FACILITY = uar_get_code_display(e.loc_facility_cd),
        SCAN_COUNT = count(*)
-plan cmai where cmai.item_id in (
-    select mi.item_id from med_identifier mi
-    where mi.value in (${inList}))
-  and cmai.valid_from_dt_tm > cnvtlookbehind("${lookbackDays}D")
+plan mi    where mi.value in (${inList})
+join cmai  where cmai.item_id = mi.item_id
+             and cmai.valid_from_dt_tm > cnvtlookbehind("${lookbackDays}D")
 join cmair where cmair.ce_med_admin_ident_id = cmai.ce_med_admin_ident_id
-join ce where cmair.event_id = ce.event_id
-join e where ce.encntr_id = e.encntr_id
+join ce    where cmair.event_id = ce.event_id
+join e     where ce.encntr_id = e.encntr_id
 group by curdomain, cmai.med_admin_barcode, e.loc_facility_cd
 order by curdomain, uar_get_code_display(e.loc_facility_cd), count(*) desc
-with maxrec=1000, time=120`
+with maxrec=1000, time=300`
 }
 
 /** Load all facility_aliases as a lowercased-string → mnemonic map. */
