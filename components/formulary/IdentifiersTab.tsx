@@ -164,7 +164,6 @@ export function IdentifiersTab({ item, highlightedFields, fieldValueMap, domainR
     if (cdm.techDesc && cdm.techDesc !== cdm.description) {
       addCdm('CDM Tech Description', cdm.techDesc, 'cdm.techDesc')
     }
-    if (cdm.procCode) addCdm('CDM Proc Code', cdm.procCode, 'cdm.procCode')
   }
 
   const rows = [...baseRows, ...cdmRows, ...extraRows]
